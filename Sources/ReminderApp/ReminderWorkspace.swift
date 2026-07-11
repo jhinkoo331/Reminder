@@ -16,8 +16,10 @@ final class ReminderWorkspace: ObservableObject {
     @Published var visibleReminderStatuses: Set<Reminder.Status> = [.todo, .done, .canceled]
     @Published var showsTaskNumbers = false
     @Published var copiesTaskNumbers = false
+    @Published var playsCopySound = true
     @Published var ignoresSearchCase = true
     @Published var filtersSearchResults = true
+    @Published var completedTaskFadeDelayMilliseconds = 3_000
     @Published var pomodoroWarningRemainingRatio = 0.20
     @Published var pomodoroWarningRemainingMinutes = 10
     @Published var focusRequest: ReminderFocusRequest?
@@ -32,6 +34,7 @@ final class ReminderWorkspace: ObservableObject {
     let workDirectoryDefaultsKey = "ReminderWorkDirectoryPath"
     let configurationFileName = "config.yaml"
     private let undoManager = UndoManager()
+    private let fileSaveQueue = ReminderSaveQueue()
 
     var canUndo: Bool { undoManager.canUndo }
     var canRedo: Bool { undoManager.canRedo }
@@ -66,6 +69,20 @@ final class ReminderWorkspace: ObservableObject {
     }
 
     func setDisplayMode(_ mode: DisplayMode) {
+        guard mode != displayMode else {
+            return
+        }
+
+        if let selectedListID,
+           let index = lists.firstIndex(where: { $0.id == selectedListID }) {
+            switch mode {
+            case .source:
+                lists[index].rawText = ReminderTextParser.serialize(lists[index].reminders)
+            case .preview:
+                lists[index].reminders = ReminderTextParser.parse(lists[index].rawText)
+            }
+        }
+
         displayMode = mode
         persistConfiguration()
     }
@@ -88,6 +105,11 @@ final class ReminderWorkspace: ObservableObject {
         persistConfiguration()
     }
 
+    func setPlaysCopySound(_ enabled: Bool) {
+        playsCopySound = enabled
+        persistConfiguration()
+    }
+
     func setIgnoresSearchCase(_ enabled: Bool) {
         ignoresSearchCase = enabled
         persistConfiguration()
@@ -95,6 +117,11 @@ final class ReminderWorkspace: ObservableObject {
 
     func setFiltersSearchResults(_ enabled: Bool) {
         filtersSearchResults = enabled
+        persistConfiguration()
+    }
+
+    func setCompletedTaskFadeDelayMilliseconds(_ milliseconds: Int) {
+        completedTaskFadeDelayMilliseconds = min(max(milliseconds, 0), 5_000)
         persistConfiguration()
     }
 
@@ -333,8 +360,8 @@ final class ReminderWorkspace: ObservableObject {
             level: 1,
             status: .todo,
             priorityID: PriorityDefinition.normal.id,
-            parent: nil,
-            text: ""
+            text: "",
+            images: []
         )
         var reminders = lists[listIndex].reminders
         reminders.insert(reminder, at: 0)
@@ -367,19 +394,25 @@ final class ReminderWorkspace: ObservableObject {
             return
         }
 
+        if displayMode == .source {
+            scheduleRawTextSave(at: index)
+            flushPendingSave(for: lists[index].fileURL)
+            return
+        }
+
         let reminders = lists[index].reminders
         let nonEmptyReminders = reminders.filter {
-            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !$0.images.isEmpty
         }
 
         if nonEmptyReminders.count != reminders.count {
-            updateRawText(
-                for: selectedListID,
-                rawText: ReminderTextParser.serialize(nonEmptyReminders)
-            )
-        } else {
-            saveList(at: index)
+            objectWillChange.send()
+            lists[index].reminders = nonEmptyReminders
         }
+
+        lists[index].rawText = ReminderTextParser.serialize(lists[index].reminders)
+        scheduleSave(at: index)
+        flushPendingSave(for: lists[index].fileURL)
     }
 
     func openConfigurationFile() {
@@ -435,6 +468,7 @@ final class ReminderWorkspace: ObservableObject {
     }
 
     func setWorkDirectory(_ url: URL) {
+        flushPendingSaves()
         let directoryURL = url.standardizedFileURL
         workDirectoryURL = directoryURL
         UserDefaults.standard.set(directoryURL.path(percentEncoded: false), forKey: workDirectoryDefaultsKey)
@@ -444,6 +478,7 @@ final class ReminderWorkspace: ObservableObject {
     }
 
     func reloadLists() {
+        flushPendingSaves()
         guard let workDirectoryURL else {
             lists = []
             selectedListID = nil
@@ -498,11 +533,89 @@ final class ReminderWorkspace: ObservableObject {
         }
         undoManager.setActionName("编辑任务")
         lists[index].rawText = rawText
-        saveList(at: index)
+        scheduleRawTextSave(at: index)
     }
 
     func updateReminders(for listID: ReminderListFile.ID, reminders: [Reminder]) {
-        updateRawText(for: listID, rawText: ReminderTextParser.serialize(reminders))
+        guard let index = lists.firstIndex(where: { $0.id == listID }),
+              lists[index].reminders != reminders
+        else {
+            return
+        }
+
+        let previousReminders = lists[index].reminders
+        undoManager.registerUndo(withTarget: self) { workspace in
+            workspace.updateReminders(for: listID, reminders: previousReminders)
+        }
+        undoManager.setActionName("编辑任务")
+        objectWillChange.send()
+        lists[index].reminders = reminders
+        scheduleSave(at: index)
+    }
+
+    func updateReminderText(for listID: ReminderListFile.ID, reminderID: Reminder.ID, text: String) {
+        guard let listIndex = lists.firstIndex(where: { $0.id == listID }),
+              let reminderIndex = lists[listIndex].reminders.firstIndex(where: { $0.id == reminderID })
+        else {
+            return
+        }
+
+        let previousText = lists[listIndex].reminders[reminderIndex].text
+        guard previousText != text else {
+            return
+        }
+
+        undoManager.registerUndo(withTarget: self) { workspace in
+            workspace.updateReminderText(for: listID, reminderID: reminderID, text: previousText)
+        }
+        undoManager.setActionName("编辑任务")
+        lists[listIndex].reminders[reminderIndex].text = text
+        scheduleSave(at: listIndex)
+    }
+
+    func flushPendingSaves() {
+        let errors = fileSaveQueue.flush()
+        if let error = errors.values.first {
+            errorMessage = "保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func flushPendingSave(for url: URL) {
+        if let error = fileSaveQueue.flush(url: url) {
+            errorMessage = "保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func scheduleSave(at index: Int) {
+        let fileURL = lists[index].fileURL
+        let reminders = lists[index].reminders
+        fileSaveQueue.schedule(reminders: reminders, to: fileURL) { [weak self] savedURL, error in
+            guard let self else {
+                return
+            }
+
+            if let error {
+                self.errorMessage = "保存 \(savedURL.lastPathComponent) 失败：\(error.localizedDescription)"
+            } else if self.errorMessage?.hasPrefix("保存 \(savedURL.lastPathComponent) 失败：") == true {
+                self.errorMessage = nil
+            }
+        }
+    }
+
+    private func scheduleRawTextSave(at index: Int) {
+        let fileURL = lists[index].fileURL
+        let rawText = lists[index].rawText
+        fileSaveQueue.schedule(rawText: rawText, to: fileURL) { [weak self] savedURL, error in
+            guard let self else {
+                return
+            }
+
+            if let error {
+                self.errorMessage = "保存 \(savedURL.lastPathComponent) 失败：\(error.localizedDescription)"
+            } else if self.errorMessage?.hasPrefix("保存 \(savedURL.lastPathComponent) 失败：") == true {
+                self.errorMessage = nil
+            }
+        }
     }
 
     @discardableResult
@@ -532,6 +645,7 @@ final class ReminderWorkspace: ObservableObject {
         }
 
         let oldURL = lists[index].fileURL
+        flushPendingSave(for: oldURL)
         let newURL = uniqueTXTFileURL(
             for: requestedName,
             in: oldURL.deletingLastPathComponent(),
@@ -542,12 +656,38 @@ final class ReminderWorkspace: ObservableObject {
             return true
         }
 
+        let oldAssetsURL = assetsDirectoryURL(forListName: lists[index].name)
+        let newAssetsURL = assetsDirectoryURL(forListName: newURL.deletingPathExtension().lastPathComponent)
+        var didMoveAssets = false
+
         do {
+            if let oldAssetsURL,
+               FileManager.default.fileExists(atPath: oldAssetsURL.path(percentEncoded: false)),
+               let newAssetsURL {
+                guard !FileManager.default.fileExists(atPath: newAssetsURL.path(percentEncoded: false)) else {
+                    errorMessage = "重命名列表失败：目标资源目录已存在。"
+                    return false
+                }
+
+                try FileManager.default.createDirectory(
+                    at: newAssetsURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.moveItem(at: oldAssetsURL, to: newAssetsURL)
+                didMoveAssets = true
+            }
+
             try FileManager.default.moveItem(at: oldURL, to: newURL)
             reloadLists()
             selectedListID = newURL.path(percentEncoded: false)
             return true
         } catch {
+            if didMoveAssets,
+               let oldAssetsURL,
+               let newAssetsURL,
+               FileManager.default.fileExists(atPath: newAssetsURL.path(percentEncoded: false)) {
+                try? FileManager.default.moveItem(at: newAssetsURL, to: oldAssetsURL)
+            }
             errorMessage = "重命名列表失败：\(error.localizedDescription)"
             return false
         }
@@ -560,10 +700,19 @@ final class ReminderWorkspace: ObservableObject {
         }
 
         let fileURL = lists[index].fileURL
+        flushPendingSave(for: fileURL)
+        let assetsURL = assetsDirectoryURL(forListName: lists[index].name)
 
         do {
             var trashedURL: NSURL?
             try FileManager.default.trashItem(at: fileURL, resultingItemURL: &trashedURL)
+
+            if let assetsURL,
+               FileManager.default.fileExists(atPath: assetsURL.path(percentEncoded: false)) {
+                var trashedAssetsURL: NSURL?
+                try FileManager.default.trashItem(at: assetsURL, resultingItemURL: &trashedAssetsURL)
+            }
+
             reloadLists()
             if selectedListID == listID {
                 selectedListID = lists.first?.id

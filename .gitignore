@@ -2,3 +2,15 @@
 .swiftpm/
 DerivedData/
 .vscode
+build/
+
+# macOS / Xcode local metadata
+.DS_Store
+xcuserdata/
+*.xcuserstate
+
+# Xcode export and test artifacts
+*.xcarchive
+*.xcresult
+*.dSYM
+*.ipa

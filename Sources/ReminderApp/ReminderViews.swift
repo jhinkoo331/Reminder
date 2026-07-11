@@ -359,6 +359,14 @@ struct SettingsView: View {
 
             Section("界面") {
                 Toggle(
+                    "复制时播放音效",
+                    isOn: Binding(
+                        get: { workspace.playsCopySound },
+                        set: { workspace.setPlaysCopySound($0) }
+                    )
+                )
+
+                Toggle(
                     "复制时包含任务序号",
                     isOn: Binding(
                         get: { workspace.copiesTaskNumbers },
@@ -366,6 +374,25 @@ struct SettingsView: View {
                     )
                 )
                 .disabled(!workspace.showsTaskNumbers)
+
+HStack {
+    Text("完成任务隐藏延迟")
+    
+    Spacer()
+    
+    TextField(
+        "", // 占位符为空，不再显示“毫秒”
+        value: Binding(
+            get: { workspace.completedTaskFadeDelayMilliseconds },
+            set: { workspace.setCompletedTaskFadeDelayMilliseconds($0) }
+        ),
+        format: .number
+    )
+    .textFieldStyle(.roundedBorder)
+    .frame(width: 64)
+    
+    Text("ms") // 改为“ms”，并且使用默认字体颜色
+}
             }
 
             Section("优先级") {
@@ -416,27 +443,27 @@ struct SettingsView: View {
                         Button {
                             workspace.chooseWorkDirectory()
                         } label: {
-                            Label("修改工作目录", systemImage: "folder")
+                            SettingsActionLabel("修改工作目录", systemImage: "folder")
                         }
 
                         Button {
                             workspace.openWorkDirectoryInFinder()
                         } label: {
-                            Label("打开", systemImage: "folder")
+                            SettingsActionLabel("打开", systemImage: "folder")
                         }
                         .disabled(workspace.workDirectoryURL == nil)
 
                         Button {
                             workspace.openConfigurationFile()
                         } label: {
-                            Label("config.yaml", systemImage: "doc.text")
+                            SettingsActionLabel("config.yaml", systemImage: "doc.text")
                         }
                         .disabled(workspace.workDirectoryURL == nil)
 
                         Button {
                             workspace.reloadLists()
                         } label: {
-                            Label("刷新", systemImage: "arrow.clockwise")
+                            SettingsActionLabel("刷新", systemImage: "arrow.clockwise")
                         }
                         .disabled(workspace.workDirectoryURL == nil)
                     }
@@ -499,7 +526,7 @@ struct PomodoroPresetEditorRow: View {
                 .frame(width: 18)
 
             TextField(
-                "名称",
+                "",
                 text: Binding(
                     get: { preset.name },
                     set: { workspace.updateCustomPomodoroPreset(id: preset.id, name: $0) }
@@ -509,32 +536,17 @@ struct PomodoroPresetEditorRow: View {
             .disabled(isSystem)
             .frame(width: 120)
 
-            Stepper(
-                value: Binding(
-                    get: { preset.totalMinutes },
-                    set: { workspace.updateCustomPomodoroPreset(id: preset.id, seconds: $0 * 60) }
-                ),
-                in: 1...480,
-                step: 5
-            ) {
-                Text("\(preset.totalMinutes) 分钟")
-                    .frame(width: 76, alignment: .leading)
-            }
-            .disabled(isSystem)
+            PomodoroDurationFields(preset: preset, isSystem: isSystem)
 
             Spacer()
 
-            if isSystem {
-                Text("默认")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Button(action: onRequestDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("删除时间")
+            Button(action: onRequestDelete) {
+                Image(systemName: "trash")
+                    .foregroundStyle(isSystem ? Color.gray : Color.red)
             }
+            .buttonStyle(.borderless)
+            .disabled(isSystem)
+            .help(isSystem ? "默认时间不可删除" : "删除时间")
         }
         .padding(.vertical, 3)
     }
@@ -580,7 +592,6 @@ struct PriorityEditorRow: View {
                 .disabled(isSystem)
                 .accessibilityLabel("优先级名称")
             }
-            .frame(width: 142, alignment: .leading)
 
             Spacer(minLength: 6)
 
@@ -621,6 +632,71 @@ struct PriorityEditorRow: View {
         }
         .toggleStyle(.checkbox)
         .padding(.vertical, 3)
+    }
+}
+
+private struct PomodoroDurationFields: View {
+    @EnvironmentObject private var workspace: ReminderWorkspace
+    let preset: PomodoroDurationPreset
+    let isSystem: Bool
+
+    private var hours: Int { preset.totalMinutes / 60 }
+    private var minutes: Int { preset.totalMinutes % 60 }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField(
+                "0",
+                value: Binding(
+                    get: { hours },
+                    set: { updateDuration(hours: $0, minutes: minutes) }
+                ),
+                format: .number
+            )
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 44)
+            .disabled(isSystem)
+
+            Text("小时")
+
+            TextField(
+                "0",
+                value: Binding(
+                    get: { minutes },
+                    set: { updateDuration(hours: hours, minutes: $0) }
+                ),
+                format: .number
+            )
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 44)
+            .disabled(isSystem)
+
+            Text("分钟")
+        }
+    }
+
+    private func updateDuration(hours: Int, minutes: Int) {
+        let normalizedHours = max(0, hours)
+        let normalizedMinutes = min(max(0, minutes), 59)
+        let totalSeconds = max(60, (normalizedHours * 60 + normalizedMinutes) * 60)
+        workspace.updateCustomPomodoroPreset(id: preset.id, seconds: totalSeconds)
+    }
+}
+
+private struct SettingsActionLabel: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+            Text(title)
+        }
     }
 }
 

@@ -35,6 +35,7 @@ struct ReminderListDetail: View {
             case .preview:
                 RenderedReminderList(
                     searchText: $searchText,
+                    isSearchFocused: $isSearchFocused,
                     ignoresSearchCase: Binding(
                         get: { workspace.ignoresSearchCase },
                         set: { workspace.setIgnoresSearchCase($0) }
@@ -76,15 +77,17 @@ struct ReminderListDetail: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
+        let isExpanded = isSearchFocused || !searchText.isEmpty
+
+        return HStack(spacing: 6) {
             FocusableSearchField(
                 text: $searchText,
                 isFocused: $isSearchFocused,
                 focusRequestID: searchFocusRequestID
             )
-            .frame(width: isSearchFocused || !searchText.isEmpty ? 190 : 130, height: 24)
+            .frame(width: isExpanded ? 190 : 130, height: 24)
 
-            if isSearchFocused || !searchText.isEmpty {
+            HStack(spacing: 6) {
                 Divider()
                     .frame(height: 16)
 
@@ -95,7 +98,11 @@ struct ReminderListDetail: View {
                         .foregroundStyle(workspace.ignoresSearchCase ? .secondary : Color.accentColor)
                 }
                 .buttonStyle(.borderless)
-                .help(workspace.ignoresSearchCase ? "忽略大小写" : "匹配大小写")
+                .help(
+                    workspace.ignoresSearchCase
+                        ? "忽略大小写：搜索不区分大小写。点击后改为匹配大小写。"
+                        : "匹配大小写：搜索会区分大小写。点击后改为忽略大小写。"
+                )
 
                 Button {
                     workspace.setFiltersSearchResults(!workspace.filtersSearchResults)
@@ -104,11 +111,23 @@ struct ReminderListDetail: View {
                         .foregroundStyle(workspace.filtersSearchResults ? Color.accentColor : .secondary)
                 }
                 .buttonStyle(.borderless)
-                .help(workspace.filtersSearchResults ? "仅显示匹配结果" : "显示全部任务并高亮匹配项")
+                .help(
+                    workspace.filtersSearchResults
+                        ? "仅显示匹配任务：隐藏不匹配的任务。点击后显示全部任务并高亮匹配内容。"
+                        : "显示全部任务：高亮匹配内容。点击后仅显示匹配任务。"
+                )
             }
+            .frame(width: isExpanded ? 66 : 0, alignment: .leading)
+            .opacity(isExpanded ? 1 : 0)
+            .scaleEffect(x: isExpanded ? 1 : 0.82, y: 1, anchor: .leading)
+            .allowsHitTesting(isExpanded)
+            .clipped()
         }
-        .frame(width: isSearchFocused || !searchText.isEmpty ? 270 : 150)
-        .animation(.easeInOut(duration: 0.15), value: isSearchFocused || !searchText.isEmpty)
+        .frame(width: isExpanded ? 270 : 150, alignment: .leading)
+        .animation(
+            .interpolatingSpring(stiffness: 300, damping: 30),
+            value: isExpanded
+        )
     }
 
     private var currentList: ReminderListFile {
@@ -138,10 +157,13 @@ struct FocusableSearchField: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSSearchField {
-        let searchField = NSSearchField()
+        let searchField = FocusTrackingSearchField()
         searchField.placeholderString = "搜索"
         searchField.delegate = context.coordinator
         searchField.focusRingType = .default
+        searchField.onFocusChanged = { [weak coordinator = context.coordinator] isFocused in
+            coordinator?.setFocus(isFocused)
+        }
         return searchField
     }
 
@@ -177,11 +199,11 @@ struct FocusableSearchField: NSViewRepresentable {
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
-            parent.isFocused = true
+            setFocus(true)
         }
 
         func controlTextDidEndEditing(_ notification: Notification) {
-            parent.isFocused = false
+            setFocus(false)
         }
 
         func controlTextDidChange(_ notification: Notification) {
@@ -191,35 +213,72 @@ struct FocusableSearchField: NSViewRepresentable {
 
             parent.text = searchField.stringValue
         }
+
+        func setFocus(_ isFocused: Bool) {
+            guard parent.isFocused != isFocused else {
+                return
+            }
+
+            parent.isFocused = isFocused
+        }
+    }
+}
+
+private final class FocusTrackingSearchField: NSSearchField {
+    var onFocusChanged: ((Bool) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onFocusChanged?(true)
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecomeFirstResponder = super.becomeFirstResponder()
+        if didBecomeFirstResponder {
+            onFocusChanged?(true)
+        }
+        return didBecomeFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResignFirstResponder = super.resignFirstResponder()
+        if didResignFirstResponder {
+            onFocusChanged?(false)
+        }
+        return didResignFirstResponder
     }
 }
 
 struct RenderedReminderList: View {
     @EnvironmentObject private var workspace: ReminderWorkspace
-    @ObservedObject private var pomodoro: PomodoroController
+    private let pomodoro: PomodoroController
     @State private var focusedReminderID: Reminder.ID?
     @State private var caretRequest: ReminderCaretRequest?
     @State private var pendingHideTokens: [Reminder.ID: UUID] = [:]
     @State private var reminderPendingDeletion: Reminder?
     @State private var selectedReminderIDs: Set<Reminder.ID> = []
     @State private var remindersPendingDeletion: Set<Reminder.ID> = []
+    @State private var activePomodoroReminderID: Reminder.ID?
     @Binding var searchText: String
+    @Binding var isSearchFocused: Bool
     @Binding var ignoresSearchCase: Bool
     @Binding var filtersSearchResults: Bool
     let listID: ReminderListFile.ID
 
     init(
         searchText: Binding<String>,
+        isSearchFocused: Binding<Bool>,
         ignoresSearchCase: Binding<Bool>,
         filtersSearchResults: Binding<Bool>,
         listID: ReminderListFile.ID,
         pomodoro: PomodoroController
     ) {
         _searchText = searchText
+        _isSearchFocused = isSearchFocused
         _ignoresSearchCase = ignoresSearchCase
         _filtersSearchResults = filtersSearchResults
         self.listID = listID
-        _pomodoro = ObservedObject(wrappedValue: pomodoro)
+        self.pomodoro = pomodoro
     }
 
     private var list: ReminderListFile? {
@@ -266,16 +325,7 @@ struct RenderedReminderList: View {
             EmptyReminderListView(onCreate: createFirstReminder)
         } else {
             VStack(spacing: 0) {
-                if let session = pomodoro.activeSession, session.listID == listID {
-                    PomodoroPinnedTaskCard(
-                        session: session,
-                        remainingSeconds: pomodoro.remainingSeconds,
-                        onCancel: { pomodoro.cancel() }
-                    )
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    Divider()
-                }
+                PomodoroPinnedTaskSection(pomodoro: pomodoro, listID: listID)
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
@@ -283,12 +333,13 @@ struct RenderedReminderList: View {
                             RenderedReminderRow(
                                 reminder: reminder,
                                 text: textBinding(for: reminder),
-                                isFocused: focusedReminderID == reminder.id,
+                                isFocused: !isSearchFocused && focusedReminderID == reminder.id,
                                 caretRequest: caretRequest?.reminderID == reminder.id ? caretRequest : nil,
                                 isSelected: selectedReminderIDs.contains(reminder.id),
                                 isSelectionMode: !selectedReminderIDs.isEmpty,
-                                isPomodoroActive: pomodoro.isActive(listID: listID, reminderID: reminder.id),
+                                isPomodoroActive: activePomodoroReminderID == reminder.id,
                                 taskNumber: workspace.showsTaskNumbers ? taskNumbers[reminder.id] : nil,
+                                assetsDirectoryURL: workspace.assetsDirectoryURL(for: listID),
                                 visibleAttributes: workspace.visibleReminderAttributes,
                                 priorityDefinitions: workspace.priorityDefinitions,
                                 priority: workspace.priorityDefinition(for: reminder.priorityID),
@@ -319,15 +370,25 @@ struct RenderedReminderList: View {
                                     workspace.setActiveReminder(listID: listID, reminderID: reminder.id)
                                     selectedReminderIDs.removeAll()
                                 },
+                                onPasteImage: { image in
+                                    workspace.insertClipboardImage(image, into: reminder.id, in: listID)
+                                },
+                                playsCopySound: workspace.playsCopySound,
                                 onCopy: { copyTasks(relativeTo: reminder) },
                                 onSelectPriority: { setPriority($0, relativeTo: reminder) },
                                 onSelectStatus: { setStatus($0, relativeTo: reminder) },
                                 pomodoroPresets: workspace.pomodoroPresets,
                                 onStartPomodoro: { workspace.startPomodoro(for: reminder, in: listID, presetID: $0) },
+                                onRemoveImage: { image in
+                                    workspace.removeImage(image, from: reminder.id, in: listID)
+                                },
+                                onSetImageScale: { image, scale in
+                                    workspace.setImageScale(scale, for: image, in: reminder.id, listID: listID)
+                                },
                                 onDelete: { requestDeletion(relativeTo: reminder) },
                                 onToggleStatus: { toggleStatus(reminder) }
                             )
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.opacity)
                         }
                     }
                     .animation(.easeOut(duration: 0.22), value: filteredReminders.map(\.id))
@@ -340,6 +401,15 @@ struct RenderedReminderList: View {
             }
             .onChange(of: workspace.focusRequest?.id) { _ in
                 applyFocusRequest()
+            }
+            .onChange(of: isSearchFocused) { focused in
+                if focused {
+                    focusedReminderID = nil
+                    caretRequest = nil
+                }
+            }
+            .onReceive(pomodoro.$activeSession) { session in
+                activePomodoroReminderID = session?.listID == listID ? session?.reminderID : nil
             }
             .confirmationDialog(
                 deletionDialogTitle,
@@ -441,11 +511,13 @@ struct RenderedReminderList: View {
                 reminders.first { $0.id == reminder.id }?.text ?? reminder.text
             },
             set: { newText in
-                updateReminder(reminder) { item in
-                    item.text = newText
+                workspace.updateReminderText(
+                    for: listID,
+                    reminderID: reminder.id,
+                    text: newText
                         .replacingOccurrences(of: "\n", with: " ")
                         .replacingOccurrences(of: "\r", with: " ")
-                }
+                )
             }
         )
     }
@@ -459,8 +531,8 @@ struct RenderedReminderList: View {
             level: 1,
             status: .todo,
             priorityID: PriorityDefinition.normal.id,
-            parent: nil,
-            text: ""
+            text: "",
+            images: []
         )
 
         workspace.updateReminders(for: listID, reminders: [reminder])
@@ -475,7 +547,6 @@ struct RenderedReminderList: View {
         }
 
         transform(&editableReminders[index])
-        normalizeParents(in: &editableReminders)
         workspace.updateReminders(for: listID, reminders: editableReminders)
     }
 
@@ -495,12 +566,11 @@ struct RenderedReminderList: View {
             level: level,
             status: .todo,
             priorityID: PriorityDefinition.normal.id,
-            parent: parentCreateTime(forLevel: level, before: index + 1, in: editableReminders),
-            text: ""
+            text: "",
+            images: []
         )
 
         editableReminders.insert(newReminder, at: index + 1)
-        normalizeParents(in: &editableReminders)
         workspace.updateReminders(for: listID, reminders: editableReminders)
         focusedReminderID = newReminder.id
     }
@@ -521,37 +591,46 @@ struct RenderedReminderList: View {
             level: level,
             status: .todo,
             priorityID: PriorityDefinition.normal.id,
-            parent: parentCreateTime(forLevel: level, before: index, in: editableReminders),
-            text: ""
+            text: "",
+            images: []
         )
 
         editableReminders.insert(newReminder, at: index)
-        normalizeParents(in: &editableReminders)
         workspace.updateReminders(for: listID, reminders: editableReminders)
         focusedReminderID = newReminder.id
     }
 
     private func toggleStatus(_ reminder: Reminder) {
         let nextStatus = reminder.status.next
+        let shouldDelayHiding = !workspace.visibleReminderStatuses.contains(nextStatus)
+        let hideToken = shouldDelayHiding ? UUID() : nil
 
-        updateReminder(reminder) { item in
-            item.status = nextStatus
+        if let hideToken {
+            pendingHideTokens[reminder.id] = hideToken
+        } else {
+            pendingHideTokens.removeValue(forKey: reminder.id)
         }
 
-        if workspace.visibleReminderStatuses.contains(nextStatus) {
-            pendingHideTokens.removeValue(forKey: reminder.id)
+        var statusTransaction = Transaction(animation: nil)
+        statusTransaction.disablesAnimations = true
+        withTransaction(statusTransaction) {
+            updateReminder(reminder) { item in
+                item.status = nextStatus
+            }
+        }
+
+        guard let hideToken else {
             return
         }
 
-        let token = UUID()
-        pendingHideTokens[reminder.id] = token
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            guard pendingHideTokens[reminder.id] == token else {
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(workspace.completedTaskFadeDelayMilliseconds)
+        ) {
+            guard pendingHideTokens[reminder.id] == hideToken else {
                 return
             }
 
-            _ = withAnimation(.easeOut(duration: 0.22)) {
+            _ = withAnimation(.easeInOut(duration: 0.22)) {
                 pendingHideTokens.removeValue(forKey: reminder.id)
             }
         }
@@ -591,7 +670,10 @@ struct RenderedReminderList: View {
             .joined(separator: "\n")
 
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(copiedText, forType: .string)
+        if NSPasteboard.general.setString(copiedText, forType: .string),
+           workspace.playsCopySound {
+            ReminderCopySound.play()
+        }
     }
 
     private func setPriority(_ priorityID: String, relativeTo reminder: Reminder) {
@@ -694,7 +776,6 @@ struct RenderedReminderList: View {
             }
         }
 
-        normalizeParents(in: &editableReminders)
         workspace.updateReminders(for: listID, reminders: editableReminders)
         reminderPendingDeletion = nil
         remindersPendingDeletion = []
@@ -710,7 +791,6 @@ struct RenderedReminderList: View {
             }
 
             item.level = reminders[index - 1].level + 1
-            item.parent = reminders[index - 1].createTime
         }
     }
 
@@ -727,45 +807,41 @@ struct RenderedReminderList: View {
             return
         }
 
+        guard editableReminders[index].images.isEmpty else {
+            return
+        }
+
         if editableReminders[index].level > 1 {
             editableReminders[index].level -= 1
-            normalizeParents(in: &editableReminders)
             workspace.updateReminders(for: listID, reminders: editableReminders)
             return
         }
 
         editableReminders.remove(at: index)
-        normalizeParents(in: &editableReminders)
         workspace.updateReminders(for: listID, reminders: editableReminders)
         focusedReminderID = editableReminders.indices.contains(index)
             ? editableReminders[index].id
             : editableReminders.last?.id
     }
 
-    private func normalizeParents(in reminders: inout [Reminder]) {
-        for index in reminders.indices {
-            let level = reminders[index].level
+}
 
-            if level <= 1 {
-                reminders[index].parent = nil
-            } else {
-                reminders[index].parent = parentCreateTime(
-                    forLevel: level,
-                    before: index,
-                    in: reminders
-                )
-            }
+private struct PomodoroPinnedTaskSection: View {
+    @ObservedObject var pomodoro: PomodoroController
+    let listID: ReminderListFile.ID
+
+    var body: some View {
+        if let session = pomodoro.activeSession, session.listID == listID {
+            PomodoroPinnedTaskCard(
+                session: session,
+                remainingSeconds: pomodoro.remainingSeconds,
+                onCancel: { pomodoro.cancel() }
+            )
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+
+            Divider()
         }
-    }
-
-    private func parentCreateTime(forLevel level: Int, before index: Int, in reminders: [Reminder]) -> String? {
-        guard level > 1, index > 0 else {
-            return nil
-        }
-
-        return reminders[..<index]
-            .last { $0.level == level - 1 && $0.status != .deleted }?
-            .createTime
     }
 }
 
@@ -853,6 +929,7 @@ struct RenderedReminderRow: View {
     let isSelectionMode: Bool
     let isPomodoroActive: Bool
     let taskNumber: String?
+    let assetsDirectoryURL: URL?
     let visibleAttributes: Set<ReminderAttribute>
     let priorityDefinitions: [PriorityDefinition]
     let priority: PriorityDefinition
@@ -869,16 +946,21 @@ struct RenderedReminderRow: View {
     let onUndo: () -> Void
     let onToggleSelection: () -> Void
     let onBeginEditing: () -> Void
+    let onPasteImage: (ReminderClipboardImage) -> Void
+    let playsCopySound: Bool
     let onCopy: () -> Void
     let onSelectPriority: (String) -> Void
     let onSelectStatus: (Reminder.Status) -> Void
     let pomodoroPresets: [PomodoroDurationPreset]
     let onStartPomodoro: (String) -> Void
+    let onRemoveImage: (ReminderImageAttachment) -> Void
+    let onSetImageScale: (ReminderImageAttachment, Int) -> Void
     let onDelete: () -> Void
     let onToggleStatus: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
             ReminderStatusButton(
                 iconName: iconName,
                 color: NSColor(hex: priority.colorHex),
@@ -929,6 +1011,8 @@ struct RenderedReminderRow: View {
                     onToggleSelection: onToggleSelection,
                     onCancelSelection: onBeginEditing,
                     onBeginEditing: onBeginEditing,
+                    onPasteImage: onPasteImage,
+                    playsCopySound: playsCopySound,
                     onCopy: onCopy,
                     priorityDefinitions: priorityDefinitions,
                     selectedPriorityID: reminder.priorityID,
@@ -944,6 +1028,17 @@ struct RenderedReminderRow: View {
             .opacity(textOpacity)
 
             Spacer()
+            }
+
+            if !reminder.images.isEmpty {
+                ReminderImageAttachmentsView(
+                    attachments: reminder.images,
+                    assetsDirectoryURL: assetsDirectoryURL,
+                    onRemove: onRemoveImage,
+                    onSetScale: onSetImageScale
+                )
+                .padding(.leading, 26)
+            }
         }
         .padding(.leading, CGFloat(reminder.level - 1) * 22)
         .padding(.horizontal, isPomodoroActive ? 8 : 0)
@@ -1012,8 +1107,9 @@ struct ReminderStatusButton: NSViewRepresentable {
         let button = NSButton()
         button.isBordered = false
         button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
         button.focusRingType = .none
-        button.setButtonType(.momentaryPushIn)
+        button.setButtonType(.momentaryChange)
         button.target = context.coordinator
         button.action = #selector(Coordinator.performAction)
         return button

@@ -19,6 +19,12 @@ struct ReminderApplication: App {
             .environmentObject(workspace)
             .preferredColorScheme(workspace.colorMode.colorScheme)
             .frame(minWidth: 840, minHeight: 520)
+            .onAppear {
+                appDelegate.configureActionMenuAppearance()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                workspace.flushPendingSaves()
+            }
         }
         .windowStyle(.titleBar)
         .commands {
@@ -152,10 +158,15 @@ struct ReminderApplication: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyDownMonitor: Any?
+    private let actionMenuHeaderStyler = ActionMenuHeaderStyler()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        DispatchQueue.main.async { [actionMenuHeaderStyler] in
+            actionMenuHeaderStyler.apply()
+        }
 
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -173,6 +184,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if let keyDownMonitor {
             NSEvent.removeMonitor(keyDownMonitor)
+        }
+    }
+
+    func configureActionMenuAppearance() {
+        DispatchQueue.main.async { [actionMenuHeaderStyler] in
+            actionMenuHeaderStyler.apply()
+        }
+    }
+}
+
+private final class ActionMenuHeaderStyler: NSObject, NSMenuDelegate {
+    func apply() {
+        guard let actionMenu = NSApp.mainMenu?.items.first(where: { $0.title == "Action" })?.submenu else {
+            return
+        }
+
+        actionMenu.delegate = self
+        apply(to: actionMenu)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        apply(to: menu)
+    }
+
+    private func apply(to actionMenu: NSMenu) {
+        guard let pomodoroHeader = actionMenu.items.first(where: {
+                  $0.title == "番茄任务" && !$0.isEnabled
+              })
+        else {
+            return
+        }
+
+        pomodoroHeader.view = MenuSectionTitleView(title: "番茄任务")
+        for item in actionMenu.items where item !== pomodoroHeader {
+            item.indentationLevel = 2
         }
     }
 }

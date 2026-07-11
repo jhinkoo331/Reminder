@@ -6,7 +6,7 @@ struct ReminderMetadata: Decodable {
     let level: Int
     let status: Reminder.Status
     let priority: String?
-    let parent: String?
+    let images: [ReminderImageAttachment]?
 
     enum CodingKeys: String, CodingKey {
         case createTime = "CreateTime"
@@ -14,7 +14,7 @@ struct ReminderMetadata: Decodable {
         case level = "Level"
         case status = "Status"
         case priority = "Priority"
-        case parent = "Parent"
+        case images = "Images"
     }
 }
 
@@ -47,8 +47,8 @@ enum ReminderTextParser {
                     level: max(metadata.level, 1),
                     status: metadata.status,
                     priorityID: metadata.priority ?? PriorityDefinition.normal.id,
-                    parent: metadata.parent,
-                    text: textLine
+                    text: textLine,
+                    images: metadata.images ?? []
                 )
             )
         }
@@ -79,8 +79,10 @@ enum ReminderTextParser {
             "\"Priority\":\"\(jsonEscaped(reminder.priorityID))\""
         ]
 
-        if let parent = reminder.parent, !parent.isEmpty {
-            parts.append("\"Parent\":\"\(jsonEscaped(parent))\"")
+        if !reminder.images.isEmpty,
+           let imagesData = try? JSONEncoder().encode(reminder.images),
+           let imagesJSON = String(data: imagesData, encoding: .utf8) {
+            parts.append("\"Images\":\(imagesJSON)")
         }
 
         return "{\(parts.joined(separator: ","))}"
@@ -146,7 +148,9 @@ func restoreWorkDirectory() {
         let interfaceLines = [
             "interface:",
             "  show_task_numbers: \(showsTaskNumbers)",
-            "  copy_task_numbers: \(copiesTaskNumbers)"
+            "  copy_task_numbers: \(copiesTaskNumbers)",
+            "  copy_sound_enabled: \(playsCopySound)",
+            "  completed_task_fade_delay_milliseconds: \(completedTaskFadeDelayMilliseconds)"
         ].joined(separator: "\n")
         let searchLines = [
             "search:",
@@ -223,6 +227,7 @@ func restoreWorkDirectory() {
             customPomodoroPresets = []
             showsTaskNumbers = false
             copiesTaskNumbers = false
+            playsCopySound = true
             ignoresSearchCase = true
             filtersSearchResults = true
             pomodoroWarningRemainingRatio = 0.20
@@ -252,6 +257,8 @@ func restoreWorkDirectory() {
             var isReadingPomodoroConfiguration = false
             var configuredShowsTaskNumbers = false
             var configuredCopiesTaskNumbers = false
+            var configuredPlaysCopySound = true
+            var configuredCompletedTaskFadeDelayMilliseconds = 3_000
             var configuredIgnoresSearchCase = true
             var configuredFiltersSearchResults = true
             var configuredPomodoroWarningRatio = 0.20
@@ -270,6 +277,22 @@ func restoreWorkDirectory() {
                     if let value = yamlValue(for: "copy_task_numbers", in: trimmed),
                        let enabled = Bool(value) {
                         configuredCopiesTaskNumbers = enabled
+                    }
+
+                    if let value = yamlValue(for: "copy_sound_enabled", in: trimmed),
+                       let enabled = Bool(value) {
+                        configuredPlaysCopySound = enabled
+                    }
+
+                    if let value = yamlValue(for: "completed_task_fade_delay_milliseconds", in: trimmed),
+                       let delay = Int(value) {
+                        configuredCompletedTaskFadeDelayMilliseconds = min(max(delay, 0), 5_000)
+                    } else if let value = yamlValue(for: "completed_task_fade_delay", in: trimmed),
+                              let delay = Double(value) {
+                        configuredCompletedTaskFadeDelayMilliseconds = min(
+                            max(Int((delay * 1_000).rounded()), 0),
+                            5_000
+                        )
                     }
                 }
 
@@ -392,6 +415,8 @@ func restoreWorkDirectory() {
             customPomodoroPresets = pomodoroPresets
             showsTaskNumbers = configuredShowsTaskNumbers
             copiesTaskNumbers = configuredShowsTaskNumbers && configuredCopiesTaskNumbers
+            playsCopySound = configuredPlaysCopySound
+            completedTaskFadeDelayMilliseconds = configuredCompletedTaskFadeDelayMilliseconds
             ignoresSearchCase = configuredIgnoresSearchCase
             filtersSearchResults = configuredFiltersSearchResults
             pomodoroWarningRemainingRatio = configuredPomodoroWarningRatio
@@ -427,15 +452,6 @@ func restoreWorkDirectory() {
         return String(value.dropFirst().dropLast())
             .replacingOccurrences(of: "\\\"", with: "\"")
             .replacingOccurrences(of: "\\\\", with: "\\")
-    }
-
-    func saveList(at index: Int) {
-        do {
-            try lists[index].rawText.write(to: lists[index].fileURL, atomically: true, encoding: .utf8)
-            errorMessage = nil
-        } catch {
-            errorMessage = "保存失败：\(error.localizedDescription)"
-        }
     }
 
     func uniqueTXTFileURL(for requestedName: String, in directoryURL: URL, excluding excludedURL: URL? = nil) -> URL {

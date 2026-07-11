@@ -13,7 +13,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ReminderApp",
-            path: "Sources/ReminderApp"
+            path: "Sources/ReminderApp",
+            resources: [
+                .copy("Resources")
+            ]
         )
     ]
 )

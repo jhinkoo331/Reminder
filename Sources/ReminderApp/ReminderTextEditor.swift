@@ -24,6 +24,8 @@ struct EditableReminderTextField: NSViewRepresentable {
     let onToggleSelection: () -> Void
     let onCancelSelection: () -> Void
     let onBeginEditing: () -> Void
+    let onPasteImage: (ReminderClipboardImage) -> Void
+    let playsCopySound: Bool
     let onCopy: () -> Void
     let priorityDefinitions: [PriorityDefinition]
     let selectedPriorityID: String
@@ -69,6 +71,8 @@ struct EditableReminderTextField: NSViewRepresentable {
         textView.onToggleSelection = onToggleSelection
         textView.onCancelSelection = onCancelSelection
         textView.onBeginEditing = onBeginEditing
+        textView.onPasteImage = onPasteImage
+        textView.playsCopySound = playsCopySound
         textView.onCopy = onCopy
         textView.isSelectionMode = isSelectionMode
         textView.priorityDefinitions = priorityDefinitions
@@ -122,6 +126,8 @@ struct EditableReminderTextField: NSViewRepresentable {
         nsView.onToggleSelection = onToggleSelection
         nsView.onCancelSelection = onCancelSelection
         nsView.onBeginEditing = onBeginEditing
+        nsView.onPasteImage = onPasteImage
+        nsView.playsCopySound = playsCopySound
         nsView.onCopy = onCopy
         nsView.isSelectionMode = isSelectionMode
         nsView.priorityDefinitions = priorityDefinitions
@@ -160,12 +166,12 @@ struct EditableReminderTextField: NSViewRepresentable {
                 return false
             }
 
-            return reminderTextView.handleNavigationCommand(commandSelector)
+            return reminderTextView.handleTextCommand(commandSelector)
         }
     }
 }
 
-private final class MenuSectionTitleView: NSView {
+final class MenuSectionTitleView: NSView {
     init(title: String) {
         super.init(frame: NSRect(x: 0, y: 0, width: 190, height: 14))
 
@@ -198,6 +204,8 @@ final class ReminderEditingTextView: NSTextView {
     var onToggleSelection: (() -> Void)?
     var onCancelSelection: (() -> Void)?
     var onBeginEditing: (() -> Void)?
+    var onPasteImage: ((ReminderClipboardImage) -> Void)?
+    var playsCopySound = true
     var onCopy: (() -> Void)?
     var isSelectionMode = false
     var priorityDefinitions: [PriorityDefinition] = PriorityDefinition.defaults
@@ -410,6 +418,29 @@ final class ReminderEditingTextView: NSTextView {
         onBeginEditing?()
     }
 
+    override func paste(_ sender: Any?) {
+        guard !isSelectionMode,
+              let image = ReminderClipboardImageReader.read()
+        else {
+            super.paste(sender)
+            return
+        }
+
+        onPasteImage?(image)
+    }
+
+    override func copy(_ sender: Any?) {
+        guard selectedRange().length == 0 else {
+            super.copy(sender)
+            if playsCopySound {
+                ReminderCopySound.play()
+            }
+            return
+        }
+
+        onCopy?()
+    }
+
     override func resignFirstResponder() -> Bool {
         let didResign = super.resignFirstResponder()
         guard didResign, selectedRange().length > 0 else {
@@ -515,8 +546,20 @@ final class ReminderEditingTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // 输入法组合文字必须先交给 macOS 文本输入系统处理。例如拼音输入期间的
+        // Return 用于确认候选或提交字母，不能被解释为“创建新任务”。
+        if hasMarkedText() {
+            super.keyDown(with: event)
+            return
+        }
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let navigationModifiers = modifiers.subtracting([.numericPad, .function])
+
+        if (modifiers == .control || modifiers == .command), event.keyCode == 8 {
+            copy(nil)
+            return
+        }
 
         if isSelectionMode, navigationModifiers.isEmpty, event.keyCode == 53 {
             onCancelSelection?()
@@ -542,9 +585,6 @@ final class ReminderEditingTextView: NSTextView {
         }
 
         switch event.keyCode {
-        case 36, 76:
-            let range = selectedRange()
-            onReturn?(range.length == 0 && range.location == 0)
         case 48:
             if event.modifierFlags.contains(.shift) {
                 onOutdent?()
@@ -562,7 +602,20 @@ final class ReminderEditingTextView: NSTextView {
         }
     }
 
-    func handleNavigationCommand(_ selector: Selector) -> Bool {
+    func handleTextCommand(_ selector: Selector) -> Bool {
+        guard !hasMarkedText() else {
+            return false
+        }
+
+        switch NSStringFromSelector(selector) {
+        case "insertNewline:", "insertNewlineIgnoringFieldEditor:":
+            let range = selectedRange()
+            onReturn?(range.length == 0 && range.location == 0)
+            return true
+        default:
+            break
+        }
+
         guard selectedRange().length == 0 else {
             return false
         }

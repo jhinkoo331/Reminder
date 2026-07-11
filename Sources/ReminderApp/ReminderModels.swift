@@ -1,9 +1,24 @@
 import AppKit
 import SwiftUI
 
-struct ReminderListFile: Identifiable, Hashable {
+final class ReminderListFile: Identifiable, Hashable {
     let fileURL: URL
     var rawText: String
+    var reminders: [Reminder]
+
+    init(fileURL: URL, rawText: String) {
+        self.fileURL = fileURL
+        self.rawText = rawText
+        reminders = ReminderTextParser.parse(rawText)
+    }
+
+    static func == (lhs: ReminderListFile, rhs: ReminderListFile) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 
     var id: String {
         fileURL.path(percentEncoded: false)
@@ -17,9 +32,6 @@ struct ReminderListFile: Identifiable, Hashable {
         fileURL.lastPathComponent
     }
 
-    var reminders: [Reminder] {
-        ReminderTextParser.parse(rawText)
-    }
 }
 
 struct ReminderFocusRequest: Identifiable {
@@ -75,8 +87,8 @@ struct Reminder: Identifiable, Hashable {
     var level: Int
     var status: Status
     var priorityID: String
-    var parent: String?
     var text: String
+    var images: [ReminderImageAttachment]
 
     var title: String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
