@@ -128,10 +128,34 @@ struct ReminderApplication: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var keyDownMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifiers == .command,
+                  event.keyCode == 3
+            else {
+                return event
+            }
+
+            NotificationCenter.default.post(name: .reminderFindRequested, object: nil)
+            return nil
+        }
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let keyDownMonitor {
+            NSEvent.removeMonitor(keyDownMonitor)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let reminderFindRequested = Notification.Name("ReminderFindRequested")
 }
 
 @MainActor
@@ -598,6 +622,7 @@ final class ReminderWorkspace: ObservableObject {
             return
         }
 
+        let configurationURL = workDirectoryURL.appendingPathComponent(configurationFileName)
         let attributes = visibleReminderAttributes
             .map(\.rawValue)
             .sorted()
@@ -617,7 +642,9 @@ final class ReminderWorkspace: ObservableObject {
             .map { "  - \(yamlQuoted($0.encodedValue))" }
             .joined(separator: "\n")
         let selectedList = selectedListID.map(yamlQuoted) ?? ""
+        let header = configurationHeader(for: configurationURL)
         let content = [
+            header,
             "version: 1",
             "work_directory: \(yamlQuoted(workDirectoryURL.path(percentEncoded: false)))",
             "display_mode: \(displayMode.rawValue)",
@@ -633,13 +660,36 @@ final class ReminderWorkspace: ObservableObject {
 
         do {
             try content.write(
-                to: workDirectoryURL.appendingPathComponent(configurationFileName),
+                to: configurationURL,
                 atomically: true,
                 encoding: .utf8
             )
         } catch {
             errorMessage = "保存配置失败：\(error.localizedDescription)"
         }
+    }
+
+    private func configurationHeader(for configurationURL: URL) -> String {
+        let prefix = "# Reminder configuration | Created by: "
+        let timestampSeparator = " | Last modified: "
+        let creator = (try? String(contentsOf: configurationURL, encoding: .utf8))?
+            .components(separatedBy: .newlines)
+            .first
+            .flatMap { firstLine -> String? in
+                guard firstLine.hasPrefix(prefix),
+                      let separatorRange = firstLine.range(of: timestampSeparator)
+                else {
+                    return nil
+                }
+
+                return String(firstLine[firstLine.index(firstLine.startIndex, offsetBy: prefix.count)..<separatorRange.lowerBound])
+            }
+            ?? NSFullUserName()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZ"
+
+        return "\(prefix)\(creator)\(timestampSeparator)\(formatter.string(from: Date()))"
     }
 
     private func loadConfiguration() {
@@ -1489,6 +1539,11 @@ struct EmptyDirectoryView: View {
 struct ReminderListDetail: View {
     @EnvironmentObject private var workspace: ReminderWorkspace
     let list: ReminderListFile
+    @State private var searchText = ""
+    @State private var ignoresSearchCase = true
+    @State private var filtersSearchResults = true
+    @State private var isSearchFocused = false
+    @State private var searchFocusRequestID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1515,29 +1570,171 @@ struct ReminderListDetail: View {
                 .padding(16)
                 .background(Color(nsColor: .textBackgroundColor))
             case .preview:
-                RenderedReminderList(listID: list.id)
+                RenderedReminderList(
+                    searchText: $searchText,
+                    ignoresSearchCase: $ignoresSearchCase,
+                    filtersSearchResults: $filtersSearchResults,
+                    listID: list.id
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(list.name)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if workspace.displayMode == .preview {
+                    searchField
+                }
+            }
+        }
+        .onAppear {
+            focusSearchIfRequested()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reminderFindRequested)) { _ in
+            guard workspace.displayMode == .preview,
+                  workspace.selectedListID == list.id
+            else {
+                return
+            }
+
+            focusSearchField()
+        }
+        .onChange(of: workspace.searchRequest?.id) { _ in
+            focusSearchIfRequested()
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            FocusableSearchField(
+                text: $searchText,
+                isFocused: $isSearchFocused,
+                focusRequestID: searchFocusRequestID
+            )
+            .frame(width: isSearchFocused || !searchText.isEmpty ? 190 : 130, height: 24)
+
+            if isSearchFocused || !searchText.isEmpty {
+                Divider()
+                    .frame(height: 16)
+
+                Button {
+                    ignoresSearchCase.toggle()
+                } label: {
+                    Image(systemName: ignoresSearchCase ? "textformat" : "textformat.alt")
+                        .foregroundStyle(ignoresSearchCase ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(ignoresSearchCase ? "忽略大小写" : "区分大小写")
+
+                Button {
+                    filtersSearchResults.toggle()
+                } label: {
+                    Image(systemName: filtersSearchResults ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(filtersSearchResults ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(filtersSearchResults ? "仅显示匹配结果" : "显示全部任务并高亮匹配项")
+            }
+        }
+        .frame(width: isSearchFocused || !searchText.isEmpty ? 270 : 150)
+        .animation(.easeInOut(duration: 0.15), value: isSearchFocused || !searchText.isEmpty)
     }
 
     private var currentList: ReminderListFile {
         workspace.lists.first { $0.id == list.id } ?? list
+    }
+
+    private func focusSearchIfRequested() {
+        guard workspace.searchRequest?.listID == list.id else {
+            return
+        }
+
+        focusSearchField()
+    }
+
+    private func focusSearchField() {
+        searchFocusRequestID = UUID()
+    }
+}
+
+struct FocusableSearchField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    let focusRequestID: UUID?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField()
+        searchField.placeholderString = "搜索"
+        searchField.delegate = context.coordinator
+        searchField.focusRingType = .default
+        return searchField
+    }
+
+    func updateNSView(_ searchField: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+
+        if searchField.stringValue != text {
+            searchField.stringValue = text
+        }
+
+        guard let focusRequestID,
+              context.coordinator.lastFocusRequestID != focusRequestID
+        else {
+            return
+        }
+
+        context.coordinator.lastFocusRequestID = focusRequestID
+        DispatchQueue.main.async { [weak searchField] in
+            guard let searchField else {
+                return
+            }
+
+            searchField.window?.makeFirstResponder(searchField)
+        }
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: FocusableSearchField
+        var lastFocusRequestID: UUID?
+
+        init(parent: FocusableSearchField) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            parent.isFocused = true
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            parent.isFocused = false
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let searchField = notification.object as? NSSearchField else {
+                return
+            }
+
+            parent.text = searchField.stringValue
+        }
     }
 }
 
 struct RenderedReminderList: View {
     @EnvironmentObject private var workspace: ReminderWorkspace
     @State private var focusedReminderID: Reminder.ID?
-    @FocusState private var isSearchFocused: Bool
+    @State private var caretRequest: ReminderCaretRequest?
     @State private var pendingHideTokens: [Reminder.ID: UUID] = [:]
     @State private var reminderPendingDeletion: Reminder?
     @State private var selectedReminderIDs: Set<Reminder.ID> = []
     @State private var remindersPendingDeletion: Set<Reminder.ID> = []
-    @State private var searchText = ""
-    @State private var ignoresSearchCase = true
+    @Binding var searchText: String
+    @Binding var ignoresSearchCase: Bool
+    @Binding var filtersSearchResults: Bool
     let listID: ReminderListFile.ID
 
     private var list: ReminderListFile? {
@@ -1552,7 +1749,7 @@ struct RenderedReminderList: View {
         reminders.filter {
             (workspace.visibleReminderStatuses.contains($0.status)
                 || pendingHideTokens[$0.id] != nil)
-                && matchesSearch($0)
+                && (!filtersSearchResults || matchesSearch($0))
         }
     }
 
@@ -1561,8 +1758,6 @@ struct RenderedReminderList: View {
             EmptyReminderListView(onCreate: createFirstReminder)
         } else {
             VStack(spacing: 0) {
-                searchField
-
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(filteredReminders) { reminder in
@@ -1570,6 +1765,7 @@ struct RenderedReminderList: View {
                                 reminder: reminder,
                                 text: textBinding(for: reminder),
                                 isFocused: focusedReminderID == reminder.id,
+                                caretRequest: caretRequest?.reminderID == reminder.id ? caretRequest : nil,
                                 isSelected: selectedReminderIDs.contains(reminder.id),
                                 isSelectionMode: !selectedReminderIDs.isEmpty,
                                 visibleAttributes: workspace.visibleReminderAttributes,
@@ -1581,13 +1777,16 @@ struct RenderedReminderList: View {
                                 onIndent: { indentReminder(reminder) },
                                 onOutdent: { outdentReminder(reminder) },
                                 onDeleteWhenEmpty: { deleteOrOutdentEmptyReminder(reminder) },
-                                onMoveUp: { moveFocus(from: reminder, offset: -1) },
-                                onMoveDown: { moveFocus(from: reminder, offset: 1) },
+                                onMoveUp: { moveFocus(from: reminder, offset: -1, placement: .lastLine($0)) },
+                                onMoveDown: { moveFocus(from: reminder, offset: 1, placement: .firstLine($0)) },
+                                onMoveLeft: { moveFocus(from: reminder, offset: -1, placement: .end) },
+                                onMoveRight: { moveFocus(from: reminder, offset: 1, placement: .start) },
                                 onUndo: { workspace.undoLastChange() },
                                 onToggleSelection: { toggleSelection(for: reminder) },
                                 onBeginEditing: { selectedReminderIDs.removeAll() },
                                 onCopy: { copyTasks(relativeTo: reminder) },
                                 onSelectPriority: { setPriority($0, relativeTo: reminder) },
+                                onSelectStatus: { setStatus($0, relativeTo: reminder) },
                                 onDelete: { requestDeletion(relativeTo: reminder) },
                                 onToggleStatus: { toggleStatus(reminder) }
                             )
@@ -1599,13 +1798,9 @@ struct RenderedReminderList: View {
             }
             .onAppear {
                 applyFocusRequest()
-                focusSearchFieldIfRequested()
             }
             .onChange(of: workspace.focusRequest?.id) { _ in
                 applyFocusRequest()
-            }
-            .onChange(of: workspace.searchRequest?.id) { _ in
-                focusSearchFieldIfRequested()
             }
             .confirmationDialog(
                 deletionDialogTitle,
@@ -1649,51 +1844,6 @@ struct RenderedReminderList: View {
         }
     }
 
-    private var searchField: some View {
-        HStack {
-            Spacer()
-
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-
-                TextField("搜索", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .focused($isSearchFocused)
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("清除搜索")
-                }
-
-                Menu {
-                    Toggle("忽略大小写", isOn: $ignoresSearchCase)
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .foregroundStyle(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .help("搜索选项")
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-            .frame(width: 230)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .textBackgroundColor))
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
-    }
-
     private func matchesSearch(_ reminder: Reminder) -> Bool {
         guard !searchText.isEmpty else {
             return true
@@ -1723,17 +1873,14 @@ struct RenderedReminderList: View {
         }
 
         focusedReminderID = request.reminderID
+        caretRequest = nil
     }
 
-    private func focusSearchFieldIfRequested() {
-        guard workspace.searchRequest?.listID == listID else {
-            return
-        }
-
-        isSearchFocused = true
-    }
-
-    private func moveFocus(from reminder: Reminder, offset: Int) {
+    private func moveFocus(
+        from reminder: Reminder,
+        offset: Int,
+        placement: ReminderCaretPlacement
+    ) {
         guard let currentIndex = filteredReminders.firstIndex(where: { $0.id == reminder.id }) else {
             return
         }
@@ -1743,7 +1890,9 @@ struct RenderedReminderList: View {
             return
         }
 
-        focusedReminderID = filteredReminders[targetIndex].id
+        let targetID = filteredReminders[targetIndex].id
+        caretRequest = ReminderCaretRequest(reminderID: targetID, placement: placement)
+        focusedReminderID = targetID
     }
 
     private func textBinding(for reminder: Reminder) -> Binding<String> {
@@ -1873,6 +2022,17 @@ struct RenderedReminderList: View {
 
         for index in editableReminders.indices where targetIDs.contains(editableReminders[index].id) {
             editableReminders[index].priorityID = priorityID
+        }
+
+        workspace.updateReminders(for: listID, reminders: editableReminders)
+    }
+
+    private func setStatus(_ status: Reminder.Status, relativeTo reminder: Reminder) {
+        let targetIDs = targetIDs(relativeTo: reminder)
+        var editableReminders = reminders
+
+        for index in editableReminders.indices where targetIDs.contains(editableReminders[index].id) {
+            editableReminders[index].status = status
         }
 
         workspace.updateReminders(for: listID, reminders: editableReminders)
@@ -2035,6 +2195,20 @@ private enum ReminderEditorMetrics {
     static let font = NSFont.preferredFont(forTextStyle: .body)
     static let lineHeight = ceil(font.ascender - font.descender + font.leading)
     static let rowHeight = lineHeight
+    static let horizontalTextInset: CGFloat = 2
+}
+
+enum ReminderCaretPlacement: Equatable {
+    case start
+    case end
+    case firstLine(CGFloat)
+    case lastLine(CGFloat)
+}
+
+struct ReminderCaretRequest: Equatable {
+    let id = UUID()
+    let reminderID: Reminder.ID
+    let placement: ReminderCaretPlacement
 }
 
 struct RenderedReminderRow: View {
@@ -2044,6 +2218,7 @@ struct RenderedReminderRow: View {
     let reminder: Reminder
     @Binding var text: String
     let isFocused: Bool
+    let caretRequest: ReminderCaretRequest?
     let isSelected: Bool
     let isSelectionMode: Bool
     let visibleAttributes: Set<ReminderAttribute>
@@ -2055,31 +2230,29 @@ struct RenderedReminderRow: View {
     let onIndent: () -> Void
     let onOutdent: () -> Void
     let onDeleteWhenEmpty: () -> Void
-    let onMoveUp: () -> Void
-    let onMoveDown: () -> Void
+    let onMoveUp: (CGFloat) -> Void
+    let onMoveDown: (CGFloat) -> Void
+    let onMoveLeft: () -> Void
+    let onMoveRight: () -> Void
     let onUndo: () -> Void
     let onToggleSelection: () -> Void
     let onBeginEditing: () -> Void
     let onCopy: () -> Void
     let onSelectPriority: (String) -> Void
+    let onSelectStatus: (Reminder.Status) -> Void
     let onDelete: () -> Void
     let onToggleStatus: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Button(action: onToggleStatus) {
-                Image(systemName: iconName)
-                    .font(.system(size: 14))
-                    .foregroundStyle(priority.color)
-                    .frame(width: 18, height: ReminderEditorMetrics.lineHeight, alignment: .center)
-                    .contentShape(Rectangle())
-            }
+            ReminderStatusButton(
+                iconName: iconName,
+                color: NSColor(hex: priority.colorHex),
+                accessibilityLabel: reminder.status.displayName,
+                action: onToggleStatus
+            )
             .frame(width: 18, height: ReminderEditorMetrics.lineHeight, alignment: .center)
-            .contentShape(Rectangle())
-            .buttonStyle(.plain)
-            .help(reminder.status.displayName)
             .opacity(isSelectionMode ? 0.32 : 1)
-            .zIndex(1)
 
             ReminderAttributeBadges(
                 reminder: reminder,
@@ -2091,8 +2264,10 @@ struct RenderedReminderRow: View {
             EditableReminderTextField(
                 text: $text,
                 isFocused: isFocused,
+                caretRequest: caretRequest,
                 textColor: textColor,
                 textFont: priority.font,
+                isSelectionMode: isSelectionMode,
                 isStruckThrough: reminder.status == .canceled || reminder.status == .deleted,
                 isUnderlined: priority.isUnderlined,
                 searchText: searchText,
@@ -2103,13 +2278,18 @@ struct RenderedReminderRow: View {
                 onDeleteWhenEmpty: onDeleteWhenEmpty,
                 onMoveUp: onMoveUp,
                 onMoveDown: onMoveDown,
+                onMoveLeft: onMoveLeft,
+                onMoveRight: onMoveRight,
                 onUndo: onUndo,
                 onToggleSelection: onToggleSelection,
+                onCancelSelection: onBeginEditing,
                 onBeginEditing: onBeginEditing,
                 onCopy: onCopy,
                 priorityDefinitions: priorityDefinitions,
                 selectedPriorityID: reminder.priorityID,
                 onSelectPriority: onSelectPriority,
+                selectedStatus: reminder.status,
+                onSelectStatus: onSelectStatus,
                 onDelete: onDelete
             )
             .frame(maxWidth: .infinity, minHeight: ReminderEditorMetrics.lineHeight)
@@ -2165,6 +2345,52 @@ struct RenderedReminderRow: View {
 
     private var textColor: NSColor {
         NSColor(hex: priority.colorHex)
+    }
+}
+
+struct ReminderStatusButton: NSViewRepresentable {
+    let iconName: String
+    let color: NSColor
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.focusRingType = .none
+        button.setButtonType(.momentaryPushIn)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.performAction)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        let configuration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        button.image = NSImage(
+            systemSymbolName: iconName,
+            accessibilityDescription: accessibilityLabel
+        )?.withSymbolConfiguration(configuration)
+        button.contentTintColor = color
+        button.toolTip = accessibilityLabel
+        button.setAccessibilityLabel(accessibilityLabel)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func performAction() {
+            action()
+        }
     }
 }
 
@@ -2239,8 +2465,10 @@ struct ReminderAttributeBadge: View {
 struct EditableReminderTextField: NSViewRepresentable {
     @Binding var text: String
     let isFocused: Bool
+    let caretRequest: ReminderCaretRequest?
     let textColor: NSColor
     let textFont: NSFont
+    let isSelectionMode: Bool
     let isStruckThrough: Bool
     let isUnderlined: Bool
     let searchText: String
@@ -2249,15 +2477,20 @@ struct EditableReminderTextField: NSViewRepresentable {
     let onIndent: () -> Void
     let onOutdent: () -> Void
     let onDeleteWhenEmpty: () -> Void
-    let onMoveUp: () -> Void
-    let onMoveDown: () -> Void
+    let onMoveUp: (CGFloat) -> Void
+    let onMoveDown: (CGFloat) -> Void
+    let onMoveLeft: () -> Void
+    let onMoveRight: () -> Void
     let onUndo: () -> Void
     let onToggleSelection: () -> Void
+    let onCancelSelection: () -> Void
     let onBeginEditing: () -> Void
     let onCopy: () -> Void
     let priorityDefinitions: [PriorityDefinition]
     let selectedPriorityID: String
     let onSelectPriority: (String) -> Void
+    let selectedStatus: Reminder.Status
+    let onSelectStatus: (Reminder.Status) -> Void
     let onDelete: () -> Void
 
     func makeNSView(context: Context) -> ReminderEditingTextView {
@@ -2272,7 +2505,10 @@ struct EditableReminderTextField: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false
-        textView.textContainerInset = .zero
+        textView.textContainerInset = NSSize(
+            width: ReminderEditorMetrics.horizontalTextInset,
+            height: 0
+        )
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
@@ -2286,13 +2522,19 @@ struct EditableReminderTextField: NSViewRepresentable {
         textView.onDeleteWhenEmpty = onDeleteWhenEmpty
         textView.onMoveUp = onMoveUp
         textView.onMoveDown = onMoveDown
+        textView.onMoveLeft = onMoveLeft
+        textView.onMoveRight = onMoveRight
         textView.onUndo = onUndo
         textView.onToggleSelection = onToggleSelection
+        textView.onCancelSelection = onCancelSelection
         textView.onBeginEditing = onBeginEditing
         textView.onCopy = onCopy
+        textView.isSelectionMode = isSelectionMode
         textView.priorityDefinitions = priorityDefinitions
         textView.selectedPriorityID = selectedPriorityID
         textView.onSelectPriority = onSelectPriority
+        textView.selectedStatus = selectedStatus
+        textView.onSelectStatus = onSelectStatus
         textView.onDelete = onDelete
         textView.setSearchHighlights(query: searchText, ignoresCase: ignoresSearchCase)
         return textView
@@ -2331,16 +2573,22 @@ struct EditableReminderTextField: NSViewRepresentable {
         nsView.onDeleteWhenEmpty = onDeleteWhenEmpty
         nsView.onMoveUp = onMoveUp
         nsView.onMoveDown = onMoveDown
+        nsView.onMoveLeft = onMoveLeft
+        nsView.onMoveRight = onMoveRight
         nsView.onUndo = onUndo
         nsView.onToggleSelection = onToggleSelection
+        nsView.onCancelSelection = onCancelSelection
         nsView.onBeginEditing = onBeginEditing
         nsView.onCopy = onCopy
+        nsView.isSelectionMode = isSelectionMode
         nsView.priorityDefinitions = priorityDefinitions
         nsView.selectedPriorityID = selectedPriorityID
         nsView.onSelectPriority = onSelectPriority
+        nsView.selectedStatus = selectedStatus
+        nsView.onSelectStatus = onSelectStatus
         nsView.onDelete = onDelete
 
-        nsView.setFocusRequested(isFocused)
+        nsView.setFocusRequested(isFocused, caretRequest: caretRequest)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -2361,6 +2609,14 @@ struct EditableReminderTextField: NSViewRepresentable {
 
             text = textView.string
         }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard let reminderTextView = textView as? ReminderEditingTextView else {
+                return false
+            }
+
+            return reminderTextView.handleNavigationCommand(commandSelector)
+        }
     }
 }
 
@@ -2369,24 +2625,37 @@ final class ReminderEditingTextView: NSTextView {
     var onIndent: (() -> Void)?
     var onOutdent: (() -> Void)?
     var onDeleteWhenEmpty: (() -> Void)?
-    var onMoveUp: (() -> Void)?
-    var onMoveDown: (() -> Void)?
+    var onMoveUp: ((CGFloat) -> Void)?
+    var onMoveDown: ((CGFloat) -> Void)?
+    var onMoveLeft: (() -> Void)?
+    var onMoveRight: (() -> Void)?
     var onUndo: (() -> Void)?
     var onToggleSelection: (() -> Void)?
+    var onCancelSelection: (() -> Void)?
     var onBeginEditing: (() -> Void)?
     var onCopy: (() -> Void)?
+    var isSelectionMode = false
     var priorityDefinitions: [PriorityDefinition] = PriorityDefinition.defaults
     var selectedPriorityID = PriorityDefinition.normal.id
     var onSelectPriority: ((String) -> Void)?
+    var selectedStatus: Reminder.Status = .todo
+    var onSelectStatus: ((Reminder.Status) -> Void)?
     var onDelete: (() -> Void)?
     private var wantsFocus = false
     private var isFocusRequestPending = false
+    private var caretRequest: ReminderCaretRequest?
+    private var appliedCaretRequestID: UUID?
 
-    func setFocusRequested(_ requested: Bool) {
+    func setFocusRequested(_ requested: Bool, caretRequest: ReminderCaretRequest?) {
         wantsFocus = requested
+        self.caretRequest = caretRequest
 
         if requested {
-            scheduleFocusRequestIfNeeded()
+            if window?.firstResponder === self {
+                applyCaretRequestIfNeeded()
+            } else {
+                scheduleFocusRequestIfNeeded()
+            }
         }
     }
 
@@ -2421,7 +2690,50 @@ final class ReminderEditingTextView: NSTextView {
             }
 
             window.makeFirstResponder(self)
+            self.applyCaretRequestIfNeeded()
         }
+    }
+
+    private func applyCaretRequestIfNeeded() {
+        guard let caretRequest,
+              caretRequest.id != appliedCaretRequestID
+        else {
+            return
+        }
+
+        appliedCaretRequestID = caretRequest.id
+        let textLength = (string as NSString).length
+        let location: Int
+
+        switch caretRequest.placement {
+        case .start:
+            location = 0
+        case .end:
+            location = textLength
+        case let .firstLine(horizontalOffset):
+            location = insertionLocation(horizontalOffset: horizontalOffset, useLastLine: false)
+        case let .lastLine(horizontalOffset):
+            location = insertionLocation(horizontalOffset: horizontalOffset, useLastLine: true)
+        }
+
+        setSelectedRange(NSRange(location: min(location, textLength), length: 0))
+        scrollRangeToVisible(selectedRange())
+    }
+
+    private func insertionLocation(horizontalOffset: CGFloat, useLastLine: Bool) -> Int {
+        guard let layoutManager,
+              let textContainer,
+              !string.isEmpty
+        else {
+            return 0
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let y = useLastLine
+            ? max(usedRect.minY, usedRect.maxY - ReminderEditorMetrics.lineHeight / 2)
+            : usedRect.minY + ReminderEditorMetrics.lineHeight / 2
+        return characterIndexForInsertion(at: NSPoint(x: horizontalOffset, y: y))
     }
 
     func fittingHeight(for width: CGFloat) -> CGFloat {
@@ -2430,8 +2742,9 @@ final class ReminderEditingTextView: NSTextView {
             attributes: [.font: font ?? ReminderEditorMetrics.font]
         )
         let layoutManager = NSLayoutManager()
+        let textWidth = width - ReminderEditorMetrics.horizontalTextInset * 2
         let textContainer = NSTextContainer(
-            size: NSSize(width: max(width, 1), height: CGFloat.greatestFiniteMagnitude)
+            size: NSSize(width: max(textWidth, 1), height: CGFloat.greatestFiniteMagnitude)
         )
         textContainer.lineFragmentPadding = 0
         layoutManager.addTextContainer(textContainer)
@@ -2447,9 +2760,23 @@ final class ReminderEditingTextView: NSTextView {
         let copyItem = NSMenuItem(title: "Copy", action: #selector(copyReminderText), keyEquivalent: "")
         copyItem.target = self
         menu.addItem(copyItem)
+
         let deleteItem = NSMenuItem(title: "Delete", action: #selector(requestDelete), keyEquivalent: "")
         deleteItem.target = self
         menu.addItem(deleteItem)
+        menu.addItem(.separator())
+
+        for status in [Reminder.Status.todo, .done, .canceled] {
+            let item = NSMenuItem(
+                title: status.displayName,
+                action: #selector(selectStatus(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = status.rawValue
+            item.state = status == selectedStatus ? .on : .off
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
 
         for priority in priorityDefinitions {
@@ -2477,7 +2804,7 @@ final class ReminderEditingTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
             onToggleSelection?()
             return
         }
@@ -2486,12 +2813,31 @@ final class ReminderEditingTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
+    override func rightMouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) {
+            onToggleSelection?()
+            return
+        }
+
+        super.rightMouseDown(with: event)
+    }
+
     @objc private func selectPriority(_ sender: NSMenuItem) {
         guard let priorityID = sender.representedObject as? String else {
             return
         }
 
         onSelectPriority?(priorityID)
+    }
+
+    @objc private func selectStatus(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let status = Reminder.Status(rawValue: rawValue)
+        else {
+            return
+        }
+
+        onSelectStatus?(status)
     }
 
     private func priorityColorImage(for priority: PriorityDefinition) -> NSImage {
@@ -2561,25 +2907,25 @@ final class ReminderEditingTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let navigationModifiers = modifiers.subtracting([.numericPad, .function])
+
+        if isSelectionMode, navigationModifiers.isEmpty, event.keyCode == 53 {
+            onCancelSelection?()
+            return
+        }
 
         if modifiers == .command, event.keyCode == 6 {
             onUndo?()
             return
         }
 
-        if modifiers.isEmpty {
+        if navigationModifiers.isEmpty {
             switch event.keyCode {
             case 115:
                 setSelectedRange(NSRange(location: 0, length: 0))
                 return
             case 119:
                 setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
-                return
-            case 126:
-                onMoveUp?()
-                return
-            case 125:
-                onMoveDown?()
                 return
             default:
                 break
@@ -2604,6 +2950,90 @@ final class ReminderEditingTextView: NSTextView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    func handleNavigationCommand(_ selector: Selector) -> Bool {
+        guard selectedRange().length == 0 else {
+            return false
+        }
+
+        switch NSStringFromSelector(selector) {
+        case "moveUp:":
+            guard isCaretOnFirstVisualLine else {
+                return false
+            }
+            onMoveUp?(caretHorizontalOffset)
+            return true
+        case "moveDown:":
+            guard isCaretOnLastVisualLine else {
+                return false
+            }
+            onMoveDown?(caretHorizontalOffset)
+            return true
+        case "moveLeft:", "moveBackward:":
+            guard selectedRange().location == 0 else {
+                return false
+            }
+            onMoveLeft?()
+            return true
+        case "moveRight:", "moveForward:":
+            guard selectedRange().location == (string as NSString).length else {
+                return false
+            }
+            onMoveRight?()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var isCaretOnFirstVisualLine: Bool {
+        guard let lineRange = caretVisualLineGlyphRange else {
+            return true
+        }
+
+        return lineRange.location == 0
+    }
+
+    private var isCaretOnLastVisualLine: Bool {
+        guard let layoutManager,
+              let lineRange = caretVisualLineGlyphRange
+        else {
+            return true
+        }
+
+        return NSMaxRange(lineRange) == layoutManager.numberOfGlyphs
+    }
+
+    private var caretVisualLineGlyphRange: NSRange? {
+        guard let layoutManager,
+              let textContainer,
+              layoutManager.numberOfGlyphs > 0
+        else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let textLength = (string as NSString).length
+        let characterIndex = min(selectedRange().location, max(0, textLength - 1))
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
+        var lineRange = NSRange()
+        _ = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
+        return lineRange
+    }
+
+    private var caretHorizontalOffset: CGFloat {
+        var actualRange = NSRange()
+        let screenRect = firstRect(
+            forCharacterRange: NSRange(location: selectedRange().location, length: 0),
+            actualRange: &actualRange
+        )
+        guard let window else {
+            return 0
+        }
+
+        let windowPoint = window.convertPoint(fromScreen: screenRect.origin)
+        return convert(windowPoint, from: nil).x
     }
 }
 
