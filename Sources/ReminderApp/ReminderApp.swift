@@ -34,6 +34,11 @@ struct ReminderApplication: App {
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(workspace.selectedListID == nil)
+
+                Button("Export as PDF…") {
+                    workspace.exportSelectedListAsPDF()
+                }
+                .disabled(workspace.selectedListID == nil)
             }
 
             CommandGroup(replacing: .undoRedo) {
