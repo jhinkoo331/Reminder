@@ -335,181 +335,398 @@ struct EmptyDirectoryView: View {
     }
 }
 
+private enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case action
+    case priority
+    case pomodoro
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gearshape"
+        case .action: "switch.2"
+        case .priority: "flag"
+        case .pomodoro: "timer"
+        }
+    }
+
+    func title(isChinese: Bool) -> String {
+        switch self {
+        case .general: isChinese ? "通用" : "General"
+        case .action: isChinese ? "行为" : "Action"
+        case .priority: isChinese ? "任务优先级" : "Priority"
+        case .pomodoro: isChinese ? "番茄任务" : "Pomodoro Task"
+        }
+    }
+}
+
 struct SettingsView: View {
-    @EnvironmentObject private var workspace: ReminderWorkspace
-    @State private var priorityPendingDeletion: PriorityDefinition?
-    @State private var pomodoroPresetPendingDeletion: PomodoroDurationPreset?
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedPane: SettingsPane = .general
+    @State private var language = "中文"
+    @State private var colorMode = "system"
+    @State private var showsTaskNumbers = true
+    @State private var playsCopySound = true
+    @State private var copiesTaskNumbers = true
+    @State private var completedTaskHideDelay = 300
+    @State private var customPriorities = ["自定义优先级"]
+    @State private var customDurations = [30]
+    @State private var priorityPendingDeletion: Int?
+    @State private var durationPendingDeletion: Int?
+
+    private var isChinese: Bool { language == "中文" }
 
     var body: some View {
-        Form {
-            Section("外观") {
-                Picker(
-                    "颜色模式",
-                    selection: Binding(
-                        get: { workspace.colorMode },
-                        set: { workspace.setColorMode($0) }
-                    )
-                ) {
-                    ForEach(ColorMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
+        NavigationSplitView {
+            List(SettingsPane.allCases, selection: $selectedPane) { pane in
+                Label(pane.title(isChinese: isChinese), systemImage: pane.systemImage)
+                    .tag(pane)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 160, ideal: 176, max: 192)
+        } detail: {
+            Form {
+                if selectedPane == .general {
+                    Section(isChinese ? "通用" : "General") {
+                LabeledContent("语言/Language") {
+                    Picker("", selection: $language) {
+                        Text("中文").tag("中文")
+                        Text("English").tag("English")
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 170)
+                }
+
+                Picker(isChinese ? "颜色模式" : "Color Mode", selection: $colorMode) {
+                    Text(isChinese ? "浅色" : "Light").tag("light")
+                    Text(isChinese ? "深色" : "Dark").tag("dark")
+                    Text(isChinese ? "跟随系统" : "System").tag("system")
                 }
                 .pickerStyle(.segmented)
-            }
 
-            Section("界面") {
-                Toggle(
-                    "复制时播放音效",
-                    isOn: Binding(
-                        get: { workspace.playsCopySound },
-                        set: { workspace.setPlaysCopySound($0) }
-                    )
-                )
-
-                Toggle(
-                    "复制时包含任务序号",
-                    isOn: Binding(
-                        get: { workspace.copiesTaskNumbers },
-                        set: { workspace.setCopiesTaskNumbers($0) }
-                    )
-                )
-                .disabled(!workspace.showsTaskNumbers)
-
-HStack {
-    Text("完成任务隐藏延迟")
-    
-    Spacer()
-    
-    TextField(
-        "", // 占位符为空，不再显示“毫秒”
-        value: Binding(
-            get: { workspace.completedTaskFadeDelayMilliseconds },
-            set: { workspace.setCompletedTaskFadeDelayMilliseconds($0) }
-        ),
-        format: .number
-    )
-    .textFieldStyle(.roundedBorder)
-    .frame(width: 64)
-    
-    Text("ms") // 改为“ms”，并且使用默认字体颜色
-}
-            }
-
-            Section("优先级") {
-                ForEach(workspace.defaultPriorities) { priority in
-                    PriorityEditorRow(priority: priority, isSystem: true) {}
-                }
-
-                ForEach(workspace.customPriorities) { priority in
-                    PriorityEditorRow(priority: priority, isSystem: false) {
-                        priorityPendingDeletion = priority
-                    }
-                }
-
-                Button {
-                    workspace.addCustomPriority()
-                } label: {
-                    Label("添加优先级", systemImage: "plus")
-                }
-            }
-
-            Section("番茄时间") {
-                ForEach(PomodoroDurationPreset.defaults) { preset in
-                    PomodoroPresetEditorRow(preset: preset, isSystem: true) {}
-                }
-
-                ForEach(workspace.customPomodoroPresets) { preset in
-                    PomodoroPresetEditorRow(preset: preset, isSystem: false) {
-                        pomodoroPresetPendingDeletion = preset
-                    }
-                }
-
-                Button {
-                    workspace.addCustomPomodoroPreset()
-                } label: {
-                    Label("添加时间", systemImage: "plus")
-                }
-            }
-
-            Section("工作目录") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(workspace.workDirectoryDisplayPath)
-                        .font(.callout)
-                        .foregroundStyle(workspace.workDirectoryURL == nil ? .secondary : .primary)
-                        .lineLimit(3)
+                LabeledContent(isChinese ? "工作目录" : "Work Directory") {
+                    Text("~/Documents/Reminder")
+                        .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+                HStack(spacing: 12) {
+                    SettingsActionButton(
+                        isChinese ? "选择工作目录" : "Select",
+                        systemImage: "folder.badge.plus"
+                    )
+                    SettingsActionButton(
+                        isChinese ? "打开目录" : "Open",
+                        systemImage: "folder"
+                    )
+                    SettingsActionButton("config.yaml", systemImage: "doc.text")
+                    SettingsActionButton(
+                        isChinese ? "刷新" : "Refresh",
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                }
+                    }
+                }
 
-                    HStack {
-                        Button {
-                            workspace.chooseWorkDirectory()
-                        } label: {
-                            SettingsActionLabel("修改工作目录", systemImage: "folder")
-                        }
+                if selectedPane == .action {
+                    Section(isChinese ? "行为" : "Action") {
+                Toggle(isChinese ? "显示任务序号" : "Show Task Numbers", isOn: $showsTaskNumbers)
+                Toggle(
+                    isChinese ? "复制时包含任务序号" : "Include Task Numbers When Copying",
+                    isOn: $copiesTaskNumbers
+                )
+                    .padding(.leading, 22)
+                    .disabled(!showsTaskNumbers)
+                Toggle(isChinese ? "复制时播放音效" : "Play Sound When Copying", isOn: $playsCopySound)
+                LabeledContent(isChinese ? "完成任务隐藏延迟" : "Completed Task Hide Delay") {
+                    HStack(spacing: 6) {
+                        TextField("", value: $completedTaskHideDelay, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                        Text(language == "中文" ? "毫秒" : "ms")
+                    }
+                }
+                    }
+                }
 
-                        Button {
-                            workspace.openWorkDirectoryInFinder()
-                        } label: {
-                            SettingsActionLabel("打开", systemImage: "folder")
-                        }
-                        .disabled(workspace.workDirectoryURL == nil)
+                if selectedPane == .priority {
+                    Section(isChinese ? "任务优先级" : "Priority") {
+                SettingsPriorityPreviewRow(
+                    name: isChinese ? "高优先级" : "High",
+                    color: .red,
+                    isBuiltIn: true,
+                    isChinese: isChinese
+                )
+                SettingsPriorityPreviewRow(
+                    name: isChinese ? "中优先级" : "Medium",
+                    color: .orange,
+                    isBuiltIn: true,
+                    isChinese: isChinese
+                )
+                SettingsPriorityPreviewRow(
+                    name: isChinese ? "低优先级" : "Low",
+                    color: .blue,
+                    isBuiltIn: true,
+                    isChinese: isChinese
+                )
+                ForEach(customPriorities.indices, id: \.self) { index in
+                    SettingsPriorityPreviewRow(
+                        name: customPriorities[index],
+                        color: .green,
+                        isBuiltIn: false,
+                        isChinese: isChinese,
+                        onNameChange: { customPriorities[index] = $0 },
+                        onDelete: { priorityPendingDeletion = index }
+                    )
+                }
+                Button {
+                    customPriorities.append(isChinese ? "自定义优先级" : "Custom Priority")
+                } label: {
+                    Label(isChinese ? "添加优先级" : "Add Priority", systemImage: "plus")
+                }
+                    }
+                }
 
-                        Button {
-                            workspace.openConfigurationFile()
-                        } label: {
-                            SettingsActionLabel("config.yaml", systemImage: "doc.text")
-                        }
-                        .disabled(workspace.workDirectoryURL == nil)
-
-                        Button {
-                            workspace.reloadLists()
-                        } label: {
-                            SettingsActionLabel("刷新", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(workspace.workDirectoryURL == nil)
+                if selectedPane == .pomodoro {
+                    Section(isChinese ? "番茄任务" : "Pomodoro Task") {
+                SettingsPomodoroPreviewRow(
+                    totalMinutes: 25,
+                    isBuiltIn: true,
+                    isChinese: isChinese
+                )
+                SettingsPomodoroPreviewRow(
+                    totalMinutes: 30,
+                    isBuiltIn: true,
+                    isChinese: isChinese
+                )
+                ForEach(customDurations.indices, id: \.self) { index in
+                    SettingsPomodoroPreviewRow(
+                        totalMinutes: customDurations[index],
+                        isBuiltIn: false,
+                        isChinese: isChinese,
+                        onDelete: { durationPendingDeletion = index }
+                    )
+                }
                     }
                 }
             }
+            .formStyle(.grouped)
+            .padding(20)
+            .navigationTitle(selectedPane.title(isChinese: isChinese))
+            .frame(minWidth: 544, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .formStyle(.grouped)
-        .padding(20)
+        .toolbar(.hidden, for: .windowToolbar)
+        .background(SettingsWindowTitle(title: isChinese ? "设置" : "Settings"))
+        .onExitCommand { dismiss() }
         .alert(
-            "删除自定义优先级？",
+            isChinese ? "删除自定义优先级？" : "Delete Custom Priority?",
             isPresented: Binding(
                 get: { priorityPendingDeletion != nil },
                 set: { if !$0 { priorityPendingDeletion = nil } }
-            ),
-            presenting: priorityPendingDeletion
-        ) { priority in
-            Button("删除", role: .destructive) {
-                workspace.removeCustomPriority(id: priority.id)
+            )
+        ) {
+            Button(isChinese ? "取消" : "Cancel", role: .cancel) {}
+            Button(isChinese ? "删除" : "Delete", role: .destructive) {
+                if let index = priorityPendingDeletion, customPriorities.indices.contains(index) {
+                    customPriorities.remove(at: index)
+                }
                 priorityPendingDeletion = nil
             }
-
-            Button("取消", role: .cancel) {
-                priorityPendingDeletion = nil
-            }
-        } message: { priority in
-            Text("“\(priority.name)” 将不再可用于任务。")
         }
         .alert(
-            "删除自定义时间？",
+            isChinese ? "删除自定义时长？" : "Delete Custom Duration?",
             isPresented: Binding(
-                get: { pomodoroPresetPendingDeletion != nil },
-                set: { if !$0 { pomodoroPresetPendingDeletion = nil } }
-            ),
-            presenting: pomodoroPresetPendingDeletion
-        ) { preset in
-            Button("删除", role: .destructive) {
-                workspace.removeCustomPomodoroPreset(id: preset.id)
-                pomodoroPresetPendingDeletion = nil
+                get: { durationPendingDeletion != nil },
+                set: { if !$0 { durationPendingDeletion = nil } }
+            )
+        ) {
+            Button(isChinese ? "取消" : "Cancel", role: .cancel) {}
+            Button(isChinese ? "删除" : "Delete", role: .destructive) {
+                if let index = durationPendingDeletion, customDurations.indices.contains(index) {
+                    customDurations.remove(at: index)
+                }
+                durationPendingDeletion = nil
             }
-
-            Button("取消", role: .cancel) {
-                pomodoroPresetPendingDeletion = nil
-            }
-        } message: { preset in
-            Text("“\(preset.name)” 将从任务右键菜单中移除。")
         }
+    }
+}
+
+private struct SettingsWindowTitle: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> NSView {
+        NSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            nsView.window?.title = title
+        }
+    }
+}
+
+private struct SettingsActionButton: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        Button(action: {}) {
+            HStack(spacing: 2) {
+                Image(systemName: systemImage)
+                Text(title)
+            }
+        }
+        .buttonStyle(.borderless)
+    }
+}
+
+private struct SettingsPriorityPreviewRow: View {
+    let name: String
+    let isBuiltIn: Bool
+    let isChinese: Bool
+    var onNameChange: ((String) -> Void)?
+    var onDelete: (() -> Void)?
+    @State private var color: Color
+    @State private var isBold = false
+    @State private var isUnderlined = false
+    @State private var isItalic = false
+
+    init(
+        name: String,
+        color: Color,
+        isBuiltIn: Bool,
+        isChinese: Bool,
+        onNameChange: ((String) -> Void)? = nil,
+        onDelete: (() -> Void)? = nil
+    ) {
+        self.name = name
+        self.isBuiltIn = isBuiltIn
+        self.isChinese = isChinese
+        self.onNameChange = onNameChange
+        self.onDelete = onDelete
+        _color = State(initialValue: color)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isBuiltIn {
+                Circle().fill(color).frame(width: 12, height: 12)
+            } else {
+                CustomPriorityColorPicker(priorityName: name, color: $color)
+                    .frame(width: 12, height: 12)
+            }
+            Spacer().frame(width: 4)
+            Toggle(isChinese ? "粗体" : "Bold", isOn: $isBold)
+            Toggle(isChinese ? "下划线" : "Underline", isOn: $isUnderlined)
+            Toggle(isChinese ? "斜体" : "Italic", isOn: $isItalic)
+            Spacer(minLength: 8)
+            if let onNameChange {
+                TextField("", text: Binding(get: { name }, set: onNameChange))
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 105, alignment: .trailing)
+            } else {
+                Text(name).frame(width: 105, alignment: .trailing)
+            }
+            Spacer(minLength: 8)
+            SettingsTrashButton(
+                isBuiltIn: isBuiltIn,
+                help: isChinese ? "内置优先级不可删除" : "Built-in priorities cannot be deleted",
+                action: { onDelete?() }
+            )
+        }
+        .toggleStyle(.checkbox)
+        .controlSize(.small)
+        .frame(height: 28)
+    }
+}
+
+private struct SettingsPomodoroPreviewRow: View {
+    let totalMinutes: Int
+    let isBuiltIn: Bool
+    let isChinese: Bool
+    var onDelete: (() -> Void)?
+    @State private var hours: Int
+    @State private var minutes: Int
+    @State private var isEditing = false
+
+    init(totalMinutes: Int, isBuiltIn: Bool, isChinese: Bool, onDelete: (() -> Void)? = nil) {
+        self.totalMinutes = totalMinutes
+        self.isBuiltIn = isBuiltIn
+        self.isChinese = isChinese
+        self.onDelete = onDelete
+        _hours = State(initialValue: totalMinutes / 60)
+        _minutes = State(initialValue: totalMinutes % 60)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "timer").foregroundStyle(.secondary)
+            Text(durationText)
+            Spacer()
+            Button {
+                isEditing = true
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.borderless)
+            .help(isChinese ? "编辑时长" : "Edit Duration")
+            .popover(isPresented: $isEditing, arrowEdge: .trailing) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(isChinese ? "编辑时长" : "Edit Duration").font(.headline)
+                    HStack(spacing: 6) {
+                        TextField("0", value: $hours, format: .number).frame(width: 46)
+                        Text(isChinese ? "小时" : "Hours")
+                        TextField("0", value: $minutes, format: .number).frame(width: 46)
+                        Text(isChinese ? "分钟" : "Minutes")
+                    }
+                    HStack {
+                        Spacer()
+                        Button(isChinese ? "完成" : "Done") { isEditing = false }
+                    }
+                }
+                .padding(14)
+            }
+            Spacer(minLength: 16)
+            SettingsTrashButton(
+                isBuiltIn: isBuiltIn,
+                help: isChinese ? "内置时长不可删除" : "Built-in durations cannot be deleted",
+                action: { onDelete?() }
+            )
+        }
+        .controlSize(.small)
+        .frame(height: 28)
+    }
+
+    private var durationText: String {
+        isChinese
+            ? "\(hours) 小时 \(minutes) 分钟"
+            : "\(hours) Hours \(minutes) Minutes"
+    }
+}
+
+private struct SettingsTrashButton: View {
+    let isBuiltIn: Bool
+    let help: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: { if !isBuiltIn { action() } }) {
+            Image(systemName: "trash")
+                .foregroundStyle(isBuiltIn ? Color.gray : (isHovering ? Color.red : Color.primary))
+        }
+        .buttonStyle(.borderless)
+        .help(isBuiltIn ? help : "")
+        .onHover { isHovering = $0 }
+        .frame(width: 16)
     }
 }
 

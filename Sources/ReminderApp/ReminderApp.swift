@@ -156,8 +156,10 @@ struct ReminderApplication: App {
             SettingsView()
                 .environmentObject(workspace)
                 .preferredColorScheme(workspace.colorMode.colorScheme)
-                .frame(width: 520)
+                .frame(width: 720)
+                .frame(minHeight: 480, idealHeight: 520, maxHeight: .infinity)
         }
+        .windowResizability(.contentSize)
     }
 }
 
