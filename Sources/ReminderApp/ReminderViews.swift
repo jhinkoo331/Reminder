@@ -407,9 +407,149 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
 
-                LabeledContent(isChinese ? "工作目录" : "Work Directory") {
-                    Text("~/Documents/Reminder")
+            Section("界面") {
+                Toggle(
+                    "复制时播放音效",
+                    isOn: Binding(
+                        get: { workspace.playsCopySound },
+                        set: { workspace.setPlaysCopySound($0) }
+                    )
+                )
+
+                Toggle(
+                    "复制时包含任务序号",
+                    isOn: Binding(
+                        get: { workspace.copiesTaskNumbers },
+                        set: { workspace.setCopiesTaskNumbers($0) }
+                    )
+                )
+                .disabled(!workspace.showsTaskNumbers)
+
+HStack {
+    Text("完成任务隐藏延迟")
+    
+    Spacer()
+    
+    TextField(
+        "", // 占位符为空，不再显示“毫秒”
+        value: Binding(
+            get: { workspace.completedTaskFadeDelayMilliseconds },
+            set: { workspace.setCompletedTaskFadeDelayMilliseconds($0) }
+        ),
+        format: .number
+    )
+    .textFieldStyle(.roundedBorder)
+    .frame(width: 64)
+    
+    Text("ms") // 改为“ms”，并且使用默认字体颜色
+}
+            }
+
+            Section("优先级") {
+                ForEach(workspace.defaultPriorities) { priority in
+                    PriorityEditorRow(priority: priority, isSystem: true) {}
+                }
+
+                ForEach(workspace.customPriorities) { priority in
+                    PriorityEditorRow(priority: priority, isSystem: false) {
+                        priorityPendingDeletion = priority
+                    }
+                }
+
+                Button {
+                    workspace.addCustomPriority()
+                } label: {
+                    Label("添加优先级", systemImage: "plus")
+                }
+            }
+
+            Section("番茄时间") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("菜单栏宽度")
+                        Spacer()
+                        Text("\(Int(workspace.pomodoroMenuBarWidth)) pt")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { workspace.pomodoroMenuBarWidth },
+                            set: { workspace.setPomodoroMenuBarWidth($0, persist: false) }
+                        ),
+                        in: PomodoroMenuBarWidth.minimum...PomodoroMenuBarWidth.maximum,
+                        step: 1,
+                        onEditingChanged: { isEditing in
+                            if !isEditing {
+                                workspace.setPomodoroMenuBarWidth(workspace.pomodoroMenuBarWidth)
+                            }
+                        }
+                    )
+                    .frame(width: 400)
+                }
+
+                HStack {
+                    Text("标红剩余比例")
+                    Spacer()
+
+                    TextField(
+                        "",
+                        value: Binding(
+                            get: { workspace.pomodoroWarningRemainingRatio * 100 },
+                            set: { workspace.setPomodoroWarningRemainingRatio($0 / 100) }
+                        ),
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+
+                    Text("%")
                         .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Text("标红剩余时间")
+                    Spacer()
+
+                    TextField(
+                        "",
+                        value: Binding(
+                            get: { workspace.pomodoroWarningRemainingMinutes },
+                            set: { workspace.setPomodoroWarningRemainingMinutes($0) }
+                        ),
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+
+                    Text("分钟")
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(PomodoroDurationPreset.defaults) { preset in
+                    PomodoroPresetEditorRow(preset: preset, isSystem: true) {}
+                }
+
+                ForEach(workspace.customPomodoroPresets) { preset in
+                    PomodoroPresetEditorRow(preset: preset, isSystem: false) {
+                        pomodoroPresetPendingDeletion = preset
+                    }
+                }
+
+                Button {
+                    workspace.addCustomPomodoroPreset()
+                } label: {
+                    Label("添加时间", systemImage: "plus")
+                }
+            }
+
+            Section("工作目录") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(workspace.workDirectoryDisplayPath)
+                        .font(.callout)
+                        .foregroundStyle(workspace.workDirectoryURL == nil ? .secondary : .primary)
+                        .lineLimit(3)
                         .textSelection(.enabled)
                 }
                 HStack(spacing: 12) {
