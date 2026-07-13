@@ -117,6 +117,14 @@ final class PomodoroController: ObservableObject {
         refreshMenuBar()
     }
 
+    func configureWarningThresholds(remainingRatio: Double, remainingMinutes: Int, refresh: Bool) {
+        warningRemainingRatio = min(max(remainingRatio, 0), 1)
+        warningRemainingMinutes = max(0, remainingMinutes)
+        if refresh {
+            refreshMenuBar()
+        }
+    }
+
     func configureMenuBarWidth(_ width: CGFloat) {
         menuBarPresenter.setStatusWidth(width)
     }
@@ -150,11 +158,17 @@ final class PomodoroController: ObservableObject {
         session.durationSeconds += seconds
         activeSession = session
         remainingSeconds = calculateRemainingSeconds(for: session)
+        if remainingSeconds > 0, timer == nil {
+            startTimer()
+        }
         refreshMenuBar()
     }
 
     func reduceActiveSession(by seconds: Int) {
-        guard seconds > 0, var session = activeSession else {
+        guard seconds > 0,
+              remainingSeconds >= 20 * 60,
+              var session = activeSession
+        else {
             return
         }
 
@@ -225,7 +239,9 @@ final class PomodoroController: ObservableObject {
         remainingSeconds = calculateRemainingSeconds(for: activeSession)
 
         if remainingSeconds == 0 {
-            cancel()
+            timer?.invalidate()
+            timer = nil
+            refreshMenuBar()
         } else {
             refreshMenuBar()
         }
@@ -270,6 +286,7 @@ private final class PomodoroMenuBarPresenter: NSResponder {
     private var remainingSeconds = 0
     private var isPointerInsideStatusItem = false
     private var isPointerInsidePopover = false
+    private var isDetailsExpanded = false
     private var popoverDismissWorkItem: DispatchWorkItem?
     private var statusWidth = PomodoroMenuBarWidth.defaultValue
     var onExtendDuration: (() -> Void)?
@@ -428,17 +445,23 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         let view = PomodoroStatusPopoverView(
             session: activeSession,
             remainingSeconds: remainingSeconds,
+            isExpanded: isDetailsExpanded,
+            onToggleExpanded: { [weak self] in
+                guard let self else { return }
+                self.isDetailsExpanded.toggle()
+                self.updateDetailsPopover()
+            },
             onExtend: { [weak self] in
                 self?.onExtendDuration?()
-                self?.updateDetailsPopover()
+                self?.keepDetailsPopoverVisible()
             },
             onReduce: { [weak self] in
                 self?.onReduceDuration?()
-                self?.updateDetailsPopover()
+                self?.keepDetailsPopoverVisible()
             },
             onTogglePause: { [weak self] in
                 self?.onTogglePause?()
-                self?.updateDetailsPopover()
+                self?.keepDetailsPopoverVisible()
             },
             onComplete: { [weak self] in
                 self?.onComplete?()
@@ -456,9 +479,19 @@ private final class PomodoroMenuBarPresenter: NSResponder {
             }
         )
         let controller = NSHostingController(rootView: view)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 340, height: 330)
+        controller.view.layoutSubtreeIfNeeded()
+        let contentSize = controller.view.fittingSize
+        controller.view.frame = NSRect(x: 0, y: 0, width: 340, height: contentSize.height)
         detailsPopover?.contentViewController = controller
-        detailsPopover?.contentSize = NSSize(width: 340, height: 330)
+        detailsPopover?.contentSize = NSSize(width: 340, height: contentSize.height)
+    }
+
+    private func keepDetailsPopoverVisible() {
+        cancelScheduledPopoverDismissal()
+        updateDetailsPopover()
+        if detailsPopover?.isShown != true {
+            showDetails()
+        }
     }
 
     private func cancelScheduledPopoverDismissal() {
@@ -539,12 +572,14 @@ private final class PomodoroStatusBarView: NSView {
         warningRemainingMinutes: Int
     ) {
         let elapsedSeconds = max(0, session.durationSeconds - remainingSeconds)
-        taskLabel.stringValue = session.taskText.singleLinePrefix
+        taskLabel.stringValue = remainingSeconds == 0
+            ? "已结束"
+            : session.taskText.singleLinePrefix
         timeLabel.stringValue = "\(elapsedSeconds.pomodoroElapsedMinutes)/\(session.durationSeconds.pomodoroMinutes)min"
         progressBar.progress = 1 - Double(remainingSeconds) / Double(session.durationSeconds)
         let hasReachedRatioThreshold = Double(remainingSeconds) / Double(session.durationSeconds) <= warningRemainingRatio
         let hasReachedTimeThreshold = remainingSeconds <= warningRemainingMinutes * 60
-        progressBar.color = hasReachedRatioThreshold || hasReachedTimeThreshold
+        progressBar.color = hasReachedRatioThreshold && hasReachedTimeThreshold
             ? .systemRed
             : .controlAccentColor
     }
@@ -584,6 +619,8 @@ private final class PomodoroProgressBar: NSView {
 private struct PomodoroStatusPopoverView: View {
     let session: PomodoroSession
     let remainingSeconds: Int
+    let isExpanded: Bool
+    let onToggleExpanded: () -> Void
     let onExtend: () -> Void
     let onReduce: () -> Void
     let onTogglePause: () -> Void
@@ -592,34 +629,37 @@ private struct PomodoroStatusPopoverView: View {
     let onHoverChange: (Bool) -> Void
 
     var body: some View {
-        let elapsedSeconds = max(0, session.durationSeconds - remainingSeconds)
-
         VStack(alignment: .leading, spacing: 9) {
             Text(session.listName)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(session.taskText)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(isExpanded ? nil : 3)
+                    .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxHeight: 130)
 
-            Text("开始执行：\(session.startedAt.pomodoroStartDisplay)")
+                if session.taskText.needsExpansion {
+                    Button(isExpanded ? "收起" : "展开") {
+                        onToggleExpanded()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
+            }
+
+            Text("开始时间：\(session.startedAt.pomodoroDetailDisplay)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Text("预计结束：\(session.expectedEndAt.pomodoroStartDisplay)")
+            Text("预计结束时间：\(session.expectedEndAt.pomodoroDetailDisplay)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                Text("已执行 \(elapsedSeconds.pomodoroElapsedMinutes) 分钟")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-
                 Spacer()
 
                 Button(action: onExtend) {
@@ -633,6 +673,7 @@ private struct PomodoroStatusPopoverView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
+                .disabled(remainingSeconds < 20 * 60)
             }
 
             HStack(spacing: 8) {
@@ -663,6 +704,10 @@ private extension String {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return String(value.prefix(18))
     }
+
+    var needsExpansion: Bool {
+        contains("\n") || count > 96
+    }
 }
 
 private extension Int {
@@ -676,10 +721,10 @@ private extension Int {
 }
 
 private extension Date {
-    var pomodoroStartDisplay: String {
+    var pomodoroDetailDisplay: String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.dateFormat = "MM-dd HH:mm"
         return formatter.string(from: self)
     }
 }

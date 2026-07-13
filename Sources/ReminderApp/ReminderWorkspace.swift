@@ -21,7 +21,7 @@ final class ReminderWorkspace: ObservableObject {
     @Published var filtersSearchResults = true
     @Published var completedTaskFadeDelayMilliseconds = 3_000
     @Published var pomodoroWarningRemainingRatio = 0.20
-    @Published var pomodoroWarningRemainingMinutes = 10
+    @Published var pomodoroWarningRemainingMinutes = 15
     @Published var pomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
     @Published var focusRequest: ReminderFocusRequest?
     @Published var searchRequest: ReminderSearchRequest?
@@ -132,6 +132,24 @@ final class ReminderWorkspace: ObservableObject {
         if persist {
             persistConfiguration()
         }
+    }
+
+    func setPomodoroWarningRemainingRatio(_ ratio: Double) {
+        pomodoroWarningRemainingRatio = min(max(ratio, 0), 1)
+        pomodoro.configureWarningThresholds(
+            remainingRatio: pomodoroWarningRemainingRatio,
+            remainingMinutes: pomodoroWarningRemainingMinutes
+        )
+        persistConfiguration()
+    }
+
+    func setPomodoroWarningRemainingMinutes(_ minutes: Int) {
+        pomodoroWarningRemainingMinutes = max(0, minutes)
+        pomodoro.configureWarningThresholds(
+            remainingRatio: pomodoroWarningRemainingRatio,
+            remainingMinutes: pomodoroWarningRemainingMinutes
+        )
+        persistConfiguration()
     }
 
     func requestSearch() {

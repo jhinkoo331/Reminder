@@ -232,7 +232,7 @@ func restoreWorkDirectory() {
             ignoresSearchCase = true
             filtersSearchResults = true
             pomodoroWarningRemainingRatio = 0.20
-            pomodoroWarningRemainingMinutes = 10
+            pomodoroWarningRemainingMinutes = 15
             pomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
             pomodoro.configureWarningThresholds(
                 remainingRatio: pomodoroWarningRemainingRatio,
@@ -265,7 +265,7 @@ func restoreWorkDirectory() {
             var configuredIgnoresSearchCase = true
             var configuredFiltersSearchResults = true
             var configuredPomodoroWarningRatio = 0.20
-            var configuredPomodoroWarningMinutes = 10
+            var configuredPomodoroWarningMinutes = 15
             var configuredPomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
 
             for line in content.components(separatedBy: .newlines) {

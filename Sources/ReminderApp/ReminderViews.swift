@@ -439,6 +439,44 @@ HStack {
                     .frame(width: 400)
                 }
 
+                HStack {
+                    Text("标红剩余比例")
+                    Spacer()
+
+                    TextField(
+                        "",
+                        value: Binding(
+                            get: { workspace.pomodoroWarningRemainingRatio * 100 },
+                            set: { workspace.setPomodoroWarningRemainingRatio($0 / 100) }
+                        ),
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+
+                    Text("%")
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Text("标红剩余时间")
+                    Spacer()
+
+                    TextField(
+                        "",
+                        value: Binding(
+                            get: { workspace.pomodoroWarningRemainingMinutes },
+                            set: { workspace.setPomodoroWarningRemainingMinutes($0) }
+                        ),
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+
+                    Text("分钟")
+                        .foregroundStyle(.secondary)
+                }
+
                 ForEach(PomodoroDurationPreset.defaults) { preset in
                     PomodoroPresetEditorRow(preset: preset, isSystem: true) {}
                 }
