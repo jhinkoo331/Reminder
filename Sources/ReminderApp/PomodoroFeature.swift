@@ -2,6 +2,16 @@ import AppKit
 import Foundation
 import SwiftUI
 
+enum PomodoroMenuBarWidth {
+    static let minimum: CGFloat = 160
+    static let defaultValue: CGFloat = 250
+    static let maximum: CGFloat = 400
+
+    static func clamped(_ width: CGFloat) -> CGFloat {
+        min(max(width, minimum), maximum)
+    }
+}
+
 struct PomodoroDurationPreset: Identifiable, Hashable {
     static let defaults = [
         PomodoroDurationPreset(id: "default-15m", name: "15分钟", seconds: 15 * 60, isSystem: true),
@@ -105,6 +115,10 @@ final class PomodoroController: ObservableObject {
         warningRemainingRatio = min(max(remainingRatio, 0), 1)
         warningRemainingMinutes = max(0, remainingMinutes)
         refreshMenuBar()
+    }
+
+    func configureMenuBarWidth(_ width: CGFloat) {
+        menuBarPresenter.setStatusWidth(width)
     }
 
     func start(
@@ -245,8 +259,6 @@ final class PomodoroController: ObservableObject {
 
 @MainActor
 private final class PomodoroMenuBarPresenter: NSResponder {
-    private static let standardStatusWidth: CGFloat = 250
-    private static let notchedStatusWidth: CGFloat = 167
     private static let popoverDismissDelay = 0.3
 
     private var statusItem: NSStatusItem?
@@ -259,11 +271,17 @@ private final class PomodoroMenuBarPresenter: NSResponder {
     private var isPointerInsideStatusItem = false
     private var isPointerInsidePopover = false
     private var popoverDismissWorkItem: DispatchWorkItem?
+    private var statusWidth = PomodoroMenuBarWidth.defaultValue
     var onExtendDuration: (() -> Void)?
     var onReduceDuration: (() -> Void)?
     var onTogglePause: (() -> Void)?
     var onComplete: (() -> Void)?
     var onAbandon: (() -> Void)?
+
+    func setStatusWidth(_ width: CGFloat) {
+        statusWidth = PomodoroMenuBarWidth.clamped(width)
+        statusItem?.length = statusWidth
+    }
 
     func show(
         session: PomodoroSession,
@@ -277,7 +295,7 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         if let statusItem {
             item = statusItem
         } else {
-            item = NSStatusBar.system.statusItem(withLength: Self.standardStatusWidth)
+            item = NSStatusBar.system.statusItem(withLength: statusWidth)
             statusItem = item
             let view = PomodoroStatusBarView()
             statusView = view
@@ -310,7 +328,7 @@ private final class PomodoroMenuBarPresenter: NSResponder {
             }
         }
 
-        updateStatusItemWidth(item)
+        item.length = statusWidth
 
         statusView?.update(
             session: session,
@@ -443,18 +461,6 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         detailsPopover?.contentSize = NSSize(width: 340, height: 330)
     }
 
-    private func updateStatusItemWidth(_ item: NSStatusItem) {
-        let screen = statusButton?.window?.screen ?? NSScreen.main
-        let hasNotch: Bool
-        if #available(macOS 12.0, *) {
-            hasNotch = (screen?.safeAreaInsets.top ?? 0) > 0
-        } else {
-            hasNotch = false
-        }
-
-        item.length = hasNotch ? Self.notchedStatusWidth : Self.standardStatusWidth
-    }
-
     private func cancelScheduledPopoverDismissal() {
         popoverDismissWorkItem?.cancel()
         popoverDismissWorkItem = nil
@@ -509,7 +515,6 @@ private final class PomodoroStatusBarView: NSView {
             labels.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             labels.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             labels.topAnchor.constraint(equalTo: topAnchor, constant: 1),
-            taskLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 155),
             timeLabel.widthAnchor.constraint(equalToConstant: 64),
             progressBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
@@ -533,8 +538,9 @@ private final class PomodoroStatusBarView: NSView {
         warningRemainingRatio: Double,
         warningRemainingMinutes: Int
     ) {
+        let elapsedSeconds = max(0, session.durationSeconds - remainingSeconds)
         taskLabel.stringValue = session.taskText.singleLinePrefix
-        timeLabel.stringValue = "\(remainingSeconds.pomodoroMinutes)/\(session.durationSeconds.pomodoroMinutes)min"
+        timeLabel.stringValue = "\(elapsedSeconds.pomodoroElapsedMinutes)/\(session.durationSeconds.pomodoroMinutes)min"
         progressBar.progress = 1 - Double(remainingSeconds) / Double(session.durationSeconds)
         let hasReachedRatioThreshold = Double(remainingSeconds) / Double(session.durationSeconds) <= warningRemainingRatio
         let hasReachedTimeThreshold = remainingSeconds <= warningRemainingMinutes * 60
@@ -586,6 +592,8 @@ private struct PomodoroStatusPopoverView: View {
     let onHoverChange: (Bool) -> Void
 
     var body: some View {
+        let elapsedSeconds = max(0, session.durationSeconds - remainingSeconds)
+
         VStack(alignment: .leading, spacing: 9) {
             Text(session.listName)
                 .font(.caption.weight(.semibold))
@@ -608,7 +616,7 @@ private struct PomodoroStatusPopoverView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                Text("剩余 \(remainingSeconds.pomodoroMinutes) 分钟")
+                Text("已执行 \(elapsedSeconds.pomodoroElapsedMinutes) 分钟")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
 
@@ -660,6 +668,10 @@ private extension String {
 private extension Int {
     var pomodoroMinutes: Int {
         Swift.max(0, Int(ceil(Double(self) / 60)))
+    }
+
+    var pomodoroElapsedMinutes: Int {
+        Swift.max(0, self / 60)
     }
 }
 

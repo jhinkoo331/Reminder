@@ -414,6 +414,31 @@ HStack {
             }
 
             Section("番茄时间") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("菜单栏宽度")
+                        Spacer()
+                        Text("\(Int(workspace.pomodoroMenuBarWidth)) pt")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { workspace.pomodoroMenuBarWidth },
+                            set: { workspace.setPomodoroMenuBarWidth($0, persist: false) }
+                        ),
+                        in: PomodoroMenuBarWidth.minimum...PomodoroMenuBarWidth.maximum,
+                        step: 1,
+                        onEditingChanged: { isEditing in
+                            if !isEditing {
+                                workspace.setPomodoroMenuBarWidth(workspace.pomodoroMenuBarWidth)
+                            }
+                        }
+                    )
+                    .frame(width: 400)
+                }
+
                 ForEach(PomodoroDurationPreset.defaults) { preset in
                     PomodoroPresetEditorRow(preset: preset, isSystem: true) {}
                 }

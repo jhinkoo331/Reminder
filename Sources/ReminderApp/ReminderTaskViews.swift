@@ -867,7 +867,7 @@ struct PomodoroPinnedTaskCard: View {
                     .frame(maxWidth: .infinity)
             }
 
-            Text("\(remainingSeconds.pomodoroDisplayMinutes)/\(session.durationSeconds.pomodoroDisplayMinutes)min")
+            Text("\(elapsedMinutes)/\(session.durationSeconds.pomodoroDisplayMinutes)min")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
@@ -888,6 +888,10 @@ struct PomodoroPinnedTaskCard: View {
         }
 
         return 1 - Double(remainingSeconds) / Double(session.durationSeconds)
+    }
+
+    private var elapsedMinutes: Int {
+        max(0, session.durationSeconds - remainingSeconds) / 60
     }
 }
 

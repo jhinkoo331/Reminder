@@ -160,7 +160,8 @@ func restoreWorkDirectory() {
         let pomodoroConfigurationLines = [
             "pomodoro:",
             "  warning_remaining_ratio: \(String(format: "%.2f", pomodoroWarningRemainingRatio))",
-            "  warning_remaining_minutes: \(pomodoroWarningRemainingMinutes)"
+            "  warning_remaining_minutes: \(pomodoroWarningRemainingMinutes)",
+            "  menu_bar_width: \(Int(pomodoroMenuBarWidth))"
         ].joined(separator: "\n")
         let selectedList = selectedListID.map(yamlQuoted) ?? ""
         let header = configurationHeader(for: configurationURL)
@@ -232,10 +233,12 @@ func restoreWorkDirectory() {
             filtersSearchResults = true
             pomodoroWarningRemainingRatio = 0.20
             pomodoroWarningRemainingMinutes = 10
+            pomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
             pomodoro.configureWarningThresholds(
                 remainingRatio: pomodoroWarningRemainingRatio,
                 remainingMinutes: pomodoroWarningRemainingMinutes
             )
+            pomodoro.configureMenuBarWidth(pomodoroMenuBarWidth)
             return
         }
 
@@ -263,6 +266,7 @@ func restoreWorkDirectory() {
             var configuredFiltersSearchResults = true
             var configuredPomodoroWarningRatio = 0.20
             var configuredPomodoroWarningMinutes = 10
+            var configuredPomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
 
             for line in content.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -317,6 +321,11 @@ func restoreWorkDirectory() {
                     if let value = yamlValue(for: "warning_remaining_minutes", in: trimmed),
                        let minutes = Int(value) {
                         configuredPomodoroWarningMinutes = max(0, minutes)
+                    }
+
+                    if let value = yamlValue(for: "menu_bar_width", in: trimmed),
+                       let width = Double(value) {
+                        configuredPomodoroMenuBarWidth = PomodoroMenuBarWidth.clamped(CGFloat(width))
                     }
                 }
 
@@ -421,10 +430,12 @@ func restoreWorkDirectory() {
             filtersSearchResults = configuredFiltersSearchResults
             pomodoroWarningRemainingRatio = configuredPomodoroWarningRatio
             pomodoroWarningRemainingMinutes = configuredPomodoroWarningMinutes
+            pomodoroMenuBarWidth = configuredPomodoroMenuBarWidth
             pomodoro.configureWarningThresholds(
                 remainingRatio: configuredPomodoroWarningRatio,
                 remainingMinutes: configuredPomodoroWarningMinutes
             )
+            pomodoro.configureMenuBarWidth(configuredPomodoroMenuBarWidth)
             selectedListID = selectedList
         } catch {
             errorMessage = "读取配置失败：\(error.localizedDescription)"
