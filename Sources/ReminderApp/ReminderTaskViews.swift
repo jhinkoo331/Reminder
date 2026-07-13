@@ -1199,16 +1199,7 @@ struct ReminderAttributeBadges: View {
     }
 
     private var displayTime: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-
-        guard let date = formatter.date(from: reminder.deadline) else {
-            return reminder.deadline
-        }
-
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter.string(from: date)
+        SmartDateTimeFormatter.string(from: reminder.deadline) ?? reminder.deadline
     }
 }
 
