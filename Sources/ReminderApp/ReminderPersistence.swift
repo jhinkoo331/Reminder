@@ -173,6 +173,7 @@ func restoreWorkDirectory() {
             "color_mode: \(colorMode.rawValue)",
             "interface_scale: \(String(format: "%.1f", interfaceScale))",
             "selected_list_id: \(selectedList)",
+            "creation_time_filter: \(creationTimeFilter?.rawValue ?? "none")",
             interfaceLines,
             searchLines,
             pomodoroConfigurationLines,
@@ -234,6 +235,7 @@ func restoreWorkDirectory() {
             pomodoroWarningRemainingRatio = 0.20
             pomodoroWarningRemainingMinutes = 15
             pomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
+            creationTimeFilter = nil
             pomodoro.configureWarningThresholds(
                 remainingRatio: pomodoroWarningRemainingRatio,
                 remainingMinutes: pomodoroWarningRemainingMinutes
@@ -268,6 +270,7 @@ func restoreWorkDirectory() {
             var configuredPomodoroWarningRatio = 0.20
             var configuredPomodoroWarningMinutes = 15
             var configuredPomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
+            var configuredCreationTimeFilter: CreationTimeFilter?
 
             for line in content.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -408,6 +411,10 @@ func restoreWorkDirectory() {
                 if let value = yamlValue(for: "selected_list_id", in: trimmed), !value.isEmpty {
                     selectedList = value
                 }
+
+                if let value = yamlValue(for: "creation_time_filter", in: trimmed) {
+                    configuredCreationTimeFilter = CreationTimeFilter(rawValue: value)
+                }
             }
 
             visibleReminderAttributes = attributes
@@ -440,6 +447,7 @@ func restoreWorkDirectory() {
             pomodoroWarningRemainingRatio = configuredPomodoroWarningRatio
             pomodoroWarningRemainingMinutes = configuredPomodoroWarningMinutes
             pomodoroMenuBarWidth = configuredPomodoroMenuBarWidth
+            creationTimeFilter = configuredCreationTimeFilter
             pomodoro.configureWarningThresholds(
                 remainingRatio: configuredPomodoroWarningRatio,
                 remainingMinutes: configuredPomodoroWarningMinutes

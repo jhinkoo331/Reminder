@@ -410,7 +410,7 @@ struct SettingsView: View {
         } detail: {
             Form {
                 if selectedPane == .general {
-                    Section(isChinese ? "通用" : "General") {
+                    Section {
                 LabeledContent("语言/Language") {
                     Picker("", selection: $language) {
                         Text("中文").tag("中文")
@@ -484,87 +484,6 @@ HStack {
                 }
             }
 
-            Section("番茄时间") {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("菜单栏宽度")
-                        Spacer()
-                        Text("\(Int(workspace.pomodoroMenuBarWidth)) pt")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Slider(
-                        value: Binding(
-                            get: { workspace.pomodoroMenuBarWidth },
-                            set: { workspace.setPomodoroMenuBarWidth($0, persist: false) }
-                        ),
-                        in: PomodoroMenuBarWidth.minimum...PomodoroMenuBarWidth.maximum,
-                        step: 1,
-                        onEditingChanged: { isEditing in
-                            if !isEditing {
-                                workspace.setPomodoroMenuBarWidth(workspace.pomodoroMenuBarWidth)
-                            }
-                        }
-                    )
-                    .frame(width: 400)
-                }
-
-                HStack {
-                    Text("标红剩余比例")
-                    Spacer()
-
-                    TextField(
-                        "",
-                        value: Binding(
-                            get: { workspace.pomodoroWarningRemainingRatio * 100 },
-                            set: { workspace.setPomodoroWarningRemainingRatio($0 / 100) }
-                        ),
-                        format: .number
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 72)
-
-                    Text("%")
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack {
-                    Text("标红剩余时间")
-                    Spacer()
-
-                    TextField(
-                        "",
-                        value: Binding(
-                            get: { workspace.pomodoroWarningRemainingMinutes },
-                            set: { workspace.setPomodoroWarningRemainingMinutes($0) }
-                        ),
-                        format: .number
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 72)
-
-                    Text("分钟")
-                        .foregroundStyle(.secondary)
-                }
-
-                ForEach(PomodoroDurationPreset.defaults) { preset in
-                    PomodoroPresetEditorRow(preset: preset, isSystem: true) {}
-                }
-
-                ForEach(workspace.customPomodoroPresets) { preset in
-                    PomodoroPresetEditorRow(preset: preset, isSystem: false) {
-                        workspace.removeCustomPomodoroPreset(id: preset.id)
-                    }
-                }
-
-                Button {
-                    workspace.addCustomPomodoroPreset()
-                } label: {
-                    Label("添加时间", systemImage: "plus")
-                }
-            }
-
             Section("工作目录") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(workspace.workDirectoryDisplayPath)
@@ -593,7 +512,7 @@ HStack {
                 }
 
                 if selectedPane == .action {
-                    Section(isChinese ? "行为" : "Action") {
+                    Section {
                 Toggle(isChinese ? "显示任务序号" : "Show Task Numbers", isOn: $showsTaskNumbers)
                 Toggle(
                     isChinese ? "复制时包含任务序号" : "Include Task Numbers When Copying",
@@ -614,7 +533,7 @@ HStack {
                 }
 
                 if selectedPane == .priority {
-                    Section(isChinese ? "任务优先级" : "Priority") {
+                    Section {
                 SettingsPriorityPreviewRow(
                     name: isChinese ? "高优先级" : "High",
                     color: .red,
@@ -652,7 +571,9 @@ HStack {
                 }
 
                 if selectedPane == .pomodoro {
-                    Section(isChinese ? "番茄任务" : "Pomodoro Task") {
+                    PomodoroTimingSettings(workspace: workspace)
+
+                    Section {
                 SettingsPomodoroPreviewRow(
                     totalMinutes: 25,
                     isBuiltIn: true,
@@ -725,6 +646,164 @@ private struct SettingsWindowTitle: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             nsView.window?.title = title
+        }
+    }
+}
+
+private struct PomodoroTimingSettings: View {
+    @ObservedObject var workspace: ReminderWorkspace
+
+    var body: some View {
+        Section("番茄时间") {
+            HStack(spacing: 12) {
+                Text("菜单栏宽度")
+                Spacer(minLength: 20)
+                PomodoroMenuWidthSlider(
+                    value: Binding(
+                        get: { workspace.pomodoroMenuBarWidth },
+                        set: { workspace.setPomodoroMenuBarWidth($0, persist: false) }
+                    ),
+                    range: PomodoroMenuBarWidth.minimum...PomodoroMenuBarWidth.maximum,
+                    onEditingEnded: {
+                        workspace.setPomodoroMenuBarWidth(workspace.pomodoroMenuBarWidth)
+                    }
+                )
+                .frame(width: 270)
+
+                Text("\(Int(workspace.pomodoroMenuBarWidth)) pt")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                Text("当任务时间小于总时间的")
+
+                TextField(
+                    "",
+                    value: Binding(
+                        get: { workspace.pomodoroWarningRemainingRatio * 100 },
+                        set: { workspace.setPomodoroWarningRemainingRatio($0 / 100) }
+                    ),
+                    format: .number
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 52)
+
+                Text("%，且剩余时间小于")
+
+                TextField(
+                    "",
+                    value: Binding(
+                        get: { workspace.pomodoroWarningRemainingMinutes },
+                        set: { workspace.setPomodoroWarningRemainingMinutes($0) }
+                    ),
+                    format: .number
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 52)
+
+                Text("分钟时，将任务标红")
+            }
+
+            ForEach(PomodoroDurationPreset.defaults) { preset in
+                PomodoroPresetEditorRow(preset: preset, isSystem: true) {}
+            }
+
+            ForEach(workspace.customPomodoroPresets) { preset in
+                PomodoroPresetEditorRow(preset: preset, isSystem: false) {
+                    workspace.removeCustomPomodoroPreset(id: preset.id)
+                }
+            }
+
+            Button {
+                workspace.addCustomPomodoroPreset()
+            } label: {
+                Label("添加时间", systemImage: "plus")
+            }
+        }
+    }
+}
+
+private struct PomodoroMenuWidthSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let onEditingEnded: () -> Void
+    @State private var isShowingMinimumNotice = false
+
+    private let thumbWidth: CGFloat = 5
+    private let thumbHeight: CGFloat = 22
+    private let trackHeight: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geometry in
+            let travel = max(geometry.size.width - thumbWidth, 1)
+            let progress = min(
+                max(value / range.upperBound, 0),
+                1
+            )
+            let thumbOffset = travel * progress
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.10))
+                    .frame(height: trackHeight)
+
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: thumbOffset + thumbWidth / 2, height: trackHeight)
+
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .frame(width: thumbWidth, height: thumbHeight)
+                    .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                    }
+                    .offset(x: thumbOffset)
+
+                if isShowingMinimumNotice {
+                    Text("已是最低宽度")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.regularMaterial, in: Capsule())
+                        .offset(x: thumbOffset + 10, y: -20)
+                }
+            }
+            .frame(height: geometry.size.height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let position = min(
+                            max((gesture.location.x - thumbWidth / 2) / travel, 0),
+                            1
+                        )
+                        let rawValue = position * range.upperBound
+                        isShowingMinimumNotice = rawValue < range.lowerBound
+                        value = min(max(rawValue.rounded(), range.lowerBound), range.upperBound)
+                    }
+                    .onEnded { _ in
+                        isShowingMinimumNotice = false
+                        onEditingEnded()
+                    }
+            )
+        }
+        .frame(height: thumbHeight)
+        .accessibilityLabel("菜单栏宽度")
+        .accessibilityValue("\(Int(value)) pt")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                value = min(value + 1, range.upperBound)
+            case .decrement:
+                value = max(value - 1, range.lowerBound)
+            @unknown default:
+                break
+            }
+            onEditingEnded()
         }
     }
 }

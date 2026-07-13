@@ -91,6 +91,7 @@ final class PomodoroController: ObservableObject {
     private var warningRemainingRatio = 0.20
     private var warningRemainingMinutes = 10
     var onCompleteTask: ((ReminderListFile.ID, Reminder.ID) -> Void)?
+    var onOpenList: ((ReminderListFile.ID) -> Void)?
 
     init() {
         menuBarPresenter = PomodoroMenuBarPresenter()
@@ -108,6 +109,12 @@ final class PomodoroController: ObservableObject {
         }
         menuBarPresenter.onAbandon = { [weak self] in
             self?.cancel()
+        }
+        menuBarPresenter.onOpenList = { [weak self] in
+            guard let self, let activeSession = self.activeSession else {
+                return
+            }
+            self.onOpenList?(activeSession.listID)
         }
     }
 
@@ -278,19 +285,32 @@ final class PomodoroController: ObservableObject {
 }
 
 @MainActor
-private final class PomodoroMenuBarPresenter: NSResponder {
+private final class PomodoroCardPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+@MainActor
+private final class PomodoroMenuBarPresenter: NSResponder, NSWindowDelegate {
     private static let popoverDismissDelay = 0.3
 
     private var statusItem: NSStatusItem?
     private var statusView: PomodoroStatusBarView?
     private weak var statusButton: NSStatusBarButton?
     private var statusButtonTrackingArea: NSTrackingArea?
-    private var detailsPopover: NSPopover?
+    private var detailsPanel: PomodoroCardPanel?
+    private var detailsHostingController: NSHostingController<PomodoroStatusCardView>?
+    private var floatingPanel: PomodoroCardPanel?
+    private var floatingHostingController: NSHostingController<PomodoroStatusCardView>?
     private var activeSession: PomodoroSession?
     private var remainingSeconds = 0
+    private var warningRemainingRatio = 0.20
+    private var warningRemainingMinutes = 10
     private var isPointerInsideStatusItem = false
     private var isPointerInsidePopover = false
     private var isDetailsExpanded = false
+    private var isDetailsOpenedByClick = false
+    private var isPinned = false
     private var popoverDismissWorkItem: DispatchWorkItem?
     private var statusWidth = PomodoroMenuBarWidth.defaultValue
     var onExtendDuration: (() -> Void)?
@@ -298,6 +318,7 @@ private final class PomodoroMenuBarPresenter: NSResponder {
     var onTogglePause: (() -> Void)?
     var onComplete: (() -> Void)?
     var onAbandon: (() -> Void)?
+    var onOpenList: (() -> Void)?
 
     func setStatusWidth(_ width: CGFloat) {
         statusWidth = PomodoroMenuBarWidth.clamped(width)
@@ -313,6 +334,8 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         let hasChangedSession = activeSession?.id != session.id
         activeSession = session
         self.remainingSeconds = remainingSeconds
+        self.warningRemainingRatio = warningRemainingRatio
+        self.warningRemainingMinutes = warningRemainingMinutes
         let item: NSStatusItem
         if let statusItem {
             item = statusItem
@@ -360,15 +383,21 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         )
         item.button?.toolTip = session.taskText
 
-        if detailsPopover == nil {
-            let popover = NSPopover()
-            popover.behavior = .transient
-            detailsPopover = popover
+        if isPinned {
+            if hasChangedSession {
+                isDetailsExpanded = false
+            }
+            updateFloatingPanel()
+            return
         }
 
-        if hasChangedSession || detailsPopover?.contentViewController == nil {
+        if hasChangedSession {
             isDetailsExpanded = false
-            updateDetailsPopover()
+        }
+        if hasChangedSession
+            || detailsPanel?.contentViewController == nil
+            || detailsPanel?.isVisible == true {
+            updateDetailsPanel()
         }
     }
 
@@ -385,12 +414,18 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         statusView = nil
         statusButton = nil
         statusButtonTrackingArea = nil
-        detailsPopover?.close()
-        detailsPopover = nil
+        detailsPanel?.close()
+        detailsPanel = nil
+        detailsHostingController = nil
+        floatingPanel?.close()
+        floatingPanel = nil
+        floatingHostingController = nil
         popoverDismissWorkItem?.cancel()
         popoverDismissWorkItem = nil
         isPointerInsideStatusItem = false
         isPointerInsidePopover = false
+        isDetailsOpenedByClick = false
+        isPinned = false
         activeSession = nil
         remainingSeconds = 0
     }
@@ -408,57 +443,183 @@ private final class PomodoroMenuBarPresenter: NSResponder {
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
         cancelScheduledPopoverDismissal()
-        if detailsPopover?.isShown == true {
-            detailsPopover?.close()
+        if isPinned {
+            floatingPanel?.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        if let detailsPanel, detailsPanel.isVisible {
+            if isDetailsOpenedByClick {
+                dismissDetailsPanel()
+            } else {
+                isDetailsOpenedByClick = true
+                positionDetailsPanel(detailsPanel)
+                detailsPanel.makeKeyAndOrderFront(nil)
+            }
         } else {
-            showDetails()
+            isDetailsOpenedByClick = true
+            showDetails(activating: true)
         }
     }
 
-    private func showDetails() {
+    private func showDetails(activating: Bool = false) {
         guard activeSession != nil else {
             return
         }
 
-        guard let popover = detailsPopover else {
+        updateDetailsPanel()
+
+        guard let detailsPanel, !detailsPanel.isVisible else {
             return
         }
 
-        guard !popover.isShown else {
-            return
-        }
-
-        guard let statusButton else {
-            return
-        }
-
-        statusButton.layoutSubtreeIfNeeded()
-        let anchorRect: NSRect
-        if let statusView {
-            statusView.layoutSubtreeIfNeeded()
-            let progressFrame = statusView.progressBarFrame
-            anchorRect = progressFrame.isEmpty
-                ? statusButton.bounds
-                : statusView.convert(progressFrame, to: statusButton)
+        positionDetailsPanel(detailsPanel)
+        if activating {
+            detailsPanel.makeKeyAndOrderFront(nil)
         } else {
-            anchorRect = statusButton.bounds
+            detailsPanel.orderFrontRegardless()
         }
-        popover.show(relativeTo: anchorRect, of: statusButton, preferredEdge: .minY)
     }
 
-    private func updateDetailsPopover() {
+    private func updateDetailsPanel() {
         guard let activeSession else {
             return
         }
 
-        let view = PomodoroStatusPopoverView(
-            session: activeSession,
+        let view = detailsView(for: activeSession)
+        let controller: NSHostingController<PomodoroStatusCardView>
+        if let detailsHostingController {
+            detailsHostingController.rootView = view
+            controller = detailsHostingController
+        } else {
+            let newController = NSHostingController(rootView: view)
+            detailsHostingController = newController
+            controller = newController
+        }
+        let contentSize = fitCardContent(controller)
+        let panel = detailsPanel ?? makeCardPanel(contentSize: contentSize)
+        panel.level = .popUpMenu
+        panel.delegate = self
+        panel.contentViewController = controller
+        panel.setContentSize(contentSize)
+        detailsPanel = panel
+        if panel.isVisible {
+            positionDetailsPanel(panel)
+        }
+    }
+
+    private func updateFloatingPanel() {
+        guard isPinned, let activeSession else {
+            return
+        }
+
+        let view = detailsView(for: activeSession)
+        let controller: NSHostingController<PomodoroStatusCardView>
+        if let floatingHostingController {
+            floatingHostingController.rootView = view
+            controller = floatingHostingController
+        } else {
+            let newController = NSHostingController(rootView: view)
+            floatingHostingController = newController
+            controller = newController
+        }
+
+        let contentSize = fitCardContent(controller)
+
+        if let floatingPanel {
+            let topLeft = NSPoint(x: floatingPanel.frame.minX, y: floatingPanel.frame.maxY)
+            floatingPanel.contentViewController = controller
+            floatingPanel.setContentSize(contentSize)
+            floatingPanel.setFrameOrigin(NSPoint(x: topLeft.x, y: topLeft.y - contentSize.height))
+            floatingPanel.orderFrontRegardless()
+            return
+        }
+
+        let panel = makeCardPanel(contentSize: contentSize)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isMovableByWindowBackground = true
+        panel.contentViewController = controller
+        if let detailsPanel {
+            panel.setFrameTopLeftPoint(
+                NSPoint(x: detailsPanel.frame.minX, y: detailsPanel.frame.maxY)
+            )
+        } else {
+            positionDetailsPanel(panel)
+        }
+        panel.makeKeyAndOrderFront(nil)
+        floatingPanel = panel
+    }
+
+    private func makeCardPanel(contentSize: NSSize) -> PomodoroCardPanel {
+        let panel = PomodoroCardPanel(
+            contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        return panel
+    }
+
+    private func positionDetailsPanel(_ panel: NSPanel) {
+        guard let statusButton,
+              let statusWindow = statusButton.window
+        else {
+            return
+        }
+
+        statusButton.layoutSubtreeIfNeeded()
+        let buttonFrame = statusWindow.convertToScreen(
+            statusButton.convert(statusButton.bounds, to: nil)
+        )
+        let visibleFrame = statusWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let horizontalInset: CGFloat = 8
+        let proposedX = buttonFrame.midX - panel.frame.width / 2
+        let minimumX = visibleFrame.minX + horizontalInset
+        let maximumX = visibleFrame.maxX - panel.frame.width - horizontalInset
+        let originX = min(max(proposedX, minimumX), max(minimumX, maximumX))
+        let originY = buttonFrame.minY - panel.frame.height - 6
+        panel.setFrameOrigin(NSPoint(x: originX, y: originY))
+    }
+
+    private func fitCardContent(
+        _ controller: NSHostingController<PomodoroStatusCardView>
+    ) -> NSSize {
+        controller.view.layoutSubtreeIfNeeded()
+        let contentSize = NSSize(
+            width: PomodoroStatusCardView.width,
+            height: controller.view.fittingSize.height
+        )
+        controller.view.frame = NSRect(origin: .zero, size: contentSize)
+        return contentSize
+    }
+
+    private func detailsView(for session: PomodoroSession) -> PomodoroStatusCardView {
+        PomodoroStatusCardView(
+            session: session,
             remainingSeconds: remainingSeconds,
+            warningRemainingRatio: warningRemainingRatio,
+            warningRemainingMinutes: warningRemainingMinutes,
             isExpanded: isDetailsExpanded,
+            isPinned: isPinned,
+            onOpenList: { [weak self] in
+                self?.onOpenList?()
+            },
             onToggleExpanded: { [weak self] in
                 guard let self else { return }
                 self.isDetailsExpanded.toggle()
-                self.updateDetailsPopover()
+                if self.isPinned {
+                    self.updateFloatingPanel()
+                } else {
+                    self.updateDetailsPanel()
+                }
+            },
+            onTogglePin: { [weak self] in
+                self?.togglePin()
             },
             onExtend: { [weak self] in
                 self?.onExtendDuration?()
@@ -487,18 +648,31 @@ private final class PomodoroMenuBarPresenter: NSResponder {
                 }
             }
         )
-        let controller = NSHostingController(rootView: view)
-        controller.view.layoutSubtreeIfNeeded()
-        let contentSize = controller.view.fittingSize
-        controller.view.frame = NSRect(x: 0, y: 0, width: 340, height: contentSize.height)
-        detailsPopover?.contentViewController = controller
-        detailsPopover?.contentSize = NSSize(width: 340, height: contentSize.height)
+    }
+
+    private func togglePin() {
+        isPinned.toggle()
+        cancelScheduledPopoverDismissal()
+
+        if isPinned {
+            isDetailsOpenedByClick = false
+            detailsPanel?.orderOut(nil)
+            updateFloatingPanel()
+        } else {
+            floatingPanel?.close()
+            floatingPanel = nil
+            floatingHostingController = nil
+        }
     }
 
     private func keepDetailsPopoverVisible() {
         cancelScheduledPopoverDismissal()
-        updateDetailsPopover()
-        if detailsPopover?.isShown != true {
+        if isPinned {
+            updateFloatingPanel()
+            return
+        }
+        updateDetailsPanel()
+        if detailsPanel?.isVisible != true {
             showDetails()
         }
     }
@@ -512,17 +686,66 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         cancelScheduledPopoverDismissal()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self,
+                  !self.isDetailsOpenedByClick,
                   !self.isPointerInsideStatusItem,
                   !self.isPointerInsidePopover
             else {
                 return
             }
 
-            self.detailsPopover?.close()
+            self.detailsPanel?.orderOut(nil)
             self.popoverDismissWorkItem = nil
         }
         popoverDismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.popoverDismissDelay, execute: workItem)
+    }
+
+    private func dismissDetailsPanel() {
+        isDetailsOpenedByClick = false
+        detailsPanel?.orderOut(nil)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === detailsPanel,
+              isDetailsOpenedByClick
+        else {
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.isDetailsOpenedByClick,
+                  self.detailsPanel?.isKeyWindow != true
+            else {
+                return
+            }
+            self.dismissDetailsPanel()
+        }
+    }
+}
+
+private enum PomodoroProgressStyle {
+    static var trackColor: NSColor {
+        NSColor.secondaryLabelColor
+            .blended(withFraction: 0.18, of: .white) ?? .secondaryLabelColor
+    }
+
+    static func fraction(remainingSeconds: Int, durationSeconds: Int) -> Double {
+        1 - Double(remainingSeconds) / Double(durationSeconds)
+    }
+
+    static func color(
+        remainingSeconds: Int,
+        durationSeconds: Int,
+        warningRemainingRatio: Double,
+        warningRemainingMinutes: Int
+    ) -> NSColor {
+        let hasReachedRatioThreshold = Double(remainingSeconds) / Double(durationSeconds)
+            <= warningRemainingRatio
+        let hasReachedTimeThreshold = remainingSeconds <= warningRemainingMinutes * 60
+        return hasReachedRatioThreshold && hasReachedTimeThreshold
+            ? .systemRed
+            : .controlAccentColor
     }
 }
 
@@ -585,12 +808,16 @@ private final class PomodoroStatusBarView: NSView {
             ? "已结束"
             : session.taskText.singleLinePrefix
         timeLabel.stringValue = "\(elapsedSeconds.pomodoroElapsedMinutes)/\(session.durationSeconds.pomodoroMinutes)min"
-        progressBar.progress = 1 - Double(remainingSeconds) / Double(session.durationSeconds)
-        let hasReachedRatioThreshold = Double(remainingSeconds) / Double(session.durationSeconds) <= warningRemainingRatio
-        let hasReachedTimeThreshold = remainingSeconds <= warningRemainingMinutes * 60
-        progressBar.color = hasReachedRatioThreshold && hasReachedTimeThreshold
-            ? .systemRed
-            : .controlAccentColor
+        progressBar.progress = PomodoroProgressStyle.fraction(
+            remainingSeconds: remainingSeconds,
+            durationSeconds: session.durationSeconds
+        )
+        progressBar.color = PomodoroProgressStyle.color(
+            remainingSeconds: remainingSeconds,
+            durationSeconds: session.durationSeconds,
+            warningRemainingRatio: warningRemainingRatio,
+            warningRemainingMinutes: warningRemainingMinutes
+        )
     }
 }
 
@@ -609,9 +836,7 @@ private final class PomodoroProgressBar: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let barRect = bounds.insetBy(dx: 0, dy: 0.5)
         let cornerRadius = barRect.height / 2
-        let trackColor = NSColor.secondaryLabelColor
-            .blended(withFraction: 0.18, of: .white) ?? .secondaryLabelColor
-        trackColor.setFill()
+        PomodoroProgressStyle.trackColor.setFill()
         NSBezierPath(roundedRect: barRect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
 
         let progressWidth = max(0, min(1, progress)) * barRect.width
@@ -625,11 +850,20 @@ private final class PomodoroProgressBar: NSView {
     }
 }
 
-private struct PomodoroStatusPopoverView: View {
+private struct PomodoroStatusCardView: View {
+    static let width: CGFloat = 340
+
+    @Environment(\.controlActiveState) private var controlActiveState
+
     let session: PomodoroSession
     let remainingSeconds: Int
+    let warningRemainingRatio: Double
+    let warningRemainingMinutes: Int
     let isExpanded: Bool
+    let isPinned: Bool
+    let onOpenList: () -> Void
     let onToggleExpanded: () -> Void
+    let onTogglePin: () -> Void
     let onExtend: () -> Void
     let onReduce: () -> Void
     let onTogglePause: () -> Void
@@ -639,9 +873,35 @@ private struct PomodoroStatusPopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(session.listName)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack(alignment: .center) {
+                Button(action: onOpenList) {
+                    Text(session.listName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("在 Reminder 中打开此文档")
+
+                Spacer()
+
+                Button(action: onTogglePin) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .rotationEffect(.degrees(45))
+                        .foregroundStyle(isPinned ? .primary : .secondary)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(isPinned ? "取消固定卡片" : "固定卡片到桌面")
+            }
+
+            PomodoroCardProgressBar(
+                remainingSeconds: remainingSeconds,
+                durationSeconds: session.durationSeconds,
+                warningRemainingRatio: warningRemainingRatio,
+                warningRemainingMinutes: warningRemainingMinutes
+            )
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(session.taskText)
@@ -657,6 +917,7 @@ private struct PomodoroStatusPopoverView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.blue)
+                    .focusable(false)
                 }
             }
 
@@ -676,6 +937,7 @@ private struct PomodoroStatusPopoverView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.green)
+                .focusable(false)
 
                 Button(action: onReduce) {
                     Text("-15min")
@@ -683,27 +945,105 @@ private struct PomodoroStatusPopoverView: View {
                 .buttonStyle(.bordered)
                 .tint(.red)
                 .disabled(remainingSeconds < 20 * 60)
+                .focusable(false)
             }
 
             HStack(spacing: 8) {
                 Button(session.pausedAt == nil ? "暂停" : "继续", action: onTogglePause)
                     .buttonStyle(.bordered)
                     .tint(.orange)
+                    .focusable(false)
 
                 Spacer()
 
-                Button("完成", action: onComplete)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-
-                Button("放弃", action: onAbandon)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                completionActions
             }
         }
         .padding(14)
-        .frame(width: 340, alignment: .leading)
+        .frame(width: Self.width, alignment: .leading)
+        .background {
+            ZStack {
+                Rectangle()
+                    .fill(.regularMaterial)
+
+                Color(nsColor: .windowBackgroundColor)
+                    .opacity(0.58)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        }
         .onHover(perform: onHoverChange)
+    }
+
+    @ViewBuilder
+    private var completionActions: some View {
+        if !isPinned || controlActiveState == .key {
+            Button("完成", action: onComplete)
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .focusable(false)
+
+            Button("放弃", action: onAbandon)
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .focusable(false)
+        } else {
+            Button("完成", action: onComplete)
+                .buttonStyle(.bordered)
+                .focusable(false)
+
+            Button("放弃", action: onAbandon)
+                .buttonStyle(.bordered)
+                .focusable(false)
+        }
+    }
+}
+
+private struct PomodoroCardProgressBar: View {
+    let remainingSeconds: Int
+    let durationSeconds: Int
+    let warningRemainingRatio: Double
+    let warningRemainingMinutes: Int
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color(nsColor: PomodoroProgressStyle.trackColor))
+
+                Capsule()
+                    .fill(Color(nsColor: progressColor))
+                    .frame(width: geometry.size.width * progress)
+            }
+        }
+        .frame(height: 7)
+    }
+
+    private var progress: CGFloat {
+        CGFloat(
+            min(
+                max(
+                    PomodoroProgressStyle.fraction(
+                        remainingSeconds: remainingSeconds,
+                        durationSeconds: durationSeconds
+                    ),
+                    0
+                ),
+                1
+            )
+        )
+    }
+
+    private var progressColor: NSColor {
+        PomodoroProgressStyle.color(
+            remainingSeconds: remainingSeconds,
+            durationSeconds: durationSeconds,
+            warningRemainingRatio: warningRemainingRatio,
+            warningRemainingMinutes: warningRemainingMinutes
+        )
     }
 }
 

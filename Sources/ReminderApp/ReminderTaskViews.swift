@@ -290,11 +290,32 @@ struct RenderedReminderList: View {
     }
 
     private var filteredReminders: [Reminder] {
-        reminders.filter {
+        let matchingReminders = reminders.filter {
             (workspace.visibleReminderStatuses.contains($0.status)
                 || pendingHideTokens[$0.id] != nil)
+                && workspace.matchesCreationTimeFilter($0)
                 && (!filtersSearchResults || matchesSearch($0))
         }
+
+        guard workspace.creationTimeFilter != nil else {
+            return matchingReminders
+        }
+
+        var visibleReminderIDs = Set(matchingReminders.map(\.id))
+        var ancestors: [Reminder] = []
+
+        for reminder in reminders {
+            while let ancestor = ancestors.last, ancestor.level >= reminder.level {
+                ancestors.removeLast()
+            }
+
+            if visibleReminderIDs.contains(reminder.id) {
+                visibleReminderIDs.formUnion(ancestors.map(\.id))
+            }
+            ancestors.append(reminder)
+        }
+
+        return reminders.filter { visibleReminderIDs.contains($0.id) }
     }
 
     private var taskNumbers: [Reminder.ID: String] {

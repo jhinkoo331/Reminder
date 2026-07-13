@@ -108,6 +108,22 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum CreationTimeFilter: String, CaseIterable, Identifiable {
+    case lastHour = "last_hour"
+    case today
+    case lastWeek = "last_week"
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .lastHour: "1小时内"
+        case .today: "今天"
+        case .lastWeek: "最近一周"
+        }
+    }
+}
+
 enum ColorMode: String, CaseIterable, Identifiable {
     case system
     case light

@@ -149,6 +149,25 @@ struct ReminderApplication: App {
                         )
                     )
                 }
+
+                Divider()
+
+                Button("按创建时间筛选") {}
+                    .disabled(true)
+
+                ForEach(CreationTimeFilter.allCases) { filter in
+                    Toggle(
+                        filter.displayName,
+                        isOn: Binding(
+                            get: { workspace.creationTimeFilter == filter },
+                            set: { isSelected in
+                                workspace.setCreationTimeFilter(isSelected ? filter : nil)
+                            }
+                        )
+                    )
+                }
+
+                Divider()
             }
         }
 

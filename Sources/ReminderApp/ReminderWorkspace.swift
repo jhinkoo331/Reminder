@@ -21,6 +21,7 @@ final class ReminderWorkspace: ObservableObject {
     @Published var customPomodoroPresets: [PomodoroDurationPreset] = []
     @Published var visibleReminderAttributes: Set<ReminderAttribute> = []
     @Published var visibleReminderStatuses: Set<Reminder.Status> = [.todo, .workingOn, .done, .canceled]
+    @Published var creationTimeFilter: CreationTimeFilter?
     @Published var showsTaskNumbers = false
     @Published var copiesTaskNumbers = false
     @Published var playsCopySound = true
@@ -52,7 +53,24 @@ final class ReminderWorkspace: ObservableObject {
         pomodoro.onCompleteTask = { [weak self] listID, reminderID in
             self?.completeReminder(listID: listID, reminderID: reminderID)
         }
+        pomodoro.onOpenList = { [weak self] listID in
+            self?.openListFromPomodoro(listID)
+        }
         restoreWorkDirectory()
+    }
+
+    private func openListFromPomodoro(_ listID: ReminderListFile.ID) {
+        guard lists.contains(where: { $0.id == listID }) else {
+            return
+        }
+
+        selectedListID = listID
+        NSApp.activate(ignoringOtherApps: true)
+
+        let reminderWindow = NSApp.windows.first(where: {
+            !($0 is NSPanel) && $0.canBecomeMain && $0.frame.width >= 800
+        })
+        reminderWindow?.makeKeyAndOrderFront(nil)
     }
 
     var selectedListIndex: Int? {
@@ -196,6 +214,38 @@ final class ReminderWorkspace: ObservableObject {
 
         visibleReminderStatuses = statuses
         persistConfiguration()
+    }
+
+    func setCreationTimeFilter(_ filter: CreationTimeFilter?) {
+        creationTimeFilter = filter
+        persistConfiguration()
+    }
+
+    func matchesCreationTimeFilter(_ reminder: Reminder, now: Date = Date()) -> Bool {
+        guard let creationTimeFilter else {
+            return true
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        guard let createDate = formatter.date(from: reminder.createTime) else {
+            return false
+        }
+
+        switch creationTimeFilter {
+        case .lastHour:
+            return createDate <= now && createDate >= now.addingTimeInterval(-3_600)
+        case .today:
+            return Calendar.current.isDateInToday(createDate)
+        case .lastWeek:
+            guard let startDate = Calendar.current.date(byAdding: .day, value: -7, to: now) else {
+                return false
+            }
+            return createDate <= now && createDate >= startDate
+        }
     }
 
     var priorityDefinitions: [PriorityDefinition] {
