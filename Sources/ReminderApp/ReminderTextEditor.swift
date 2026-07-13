@@ -172,7 +172,7 @@ struct EditableReminderTextField: NSViewRepresentable {
 }
 
 final class MenuSectionTitleView: NSView {
-    init(title: String) {
+    init(title: String, leadingInset: CGFloat = 39) {
         super.init(frame: NSRect(x: 0, y: 0, width: 190, height: 14))
 
         let label = NSTextField(labelWithString: title)
@@ -181,7 +181,7 @@ final class MenuSectionTitleView: NSView {
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 30),
             label.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
@@ -388,7 +388,7 @@ final class ReminderEditingTextView: NSTextView {
     private func sectionTitle(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        item.view = MenuSectionTitleView(title: title)
+        item.view = MenuSectionTitleView(title: title, leadingInset: 30)
         return item
     }
 

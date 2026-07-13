@@ -20,24 +20,30 @@ struct ContentView: View {
             workspace.persistConfiguration()
         }
         .alert(
-            "是否替换当前任务？？",
+            workspace.isPendingPomodoroRestart
+                ? "当前任务正在运行，是否重新开始？"
+                : "是否替换当前任务？",
             isPresented: Binding(
-                get: { workspace.isPomodoroReplacementConfirmationPresented },
+                get: { workspace.isPomodoroStartConfirmationPresented },
                 set: { isPresented in
                     if !isPresented {
-                        workspace.cancelPomodoroReplacement()
+                        workspace.cancelPomodoroStart()
                     }
                 }
             )
         ) {
             Button("取消", role: .cancel) {
-                workspace.cancelPomodoroReplacement()
+                workspace.cancelPomodoroStart()
             }
-            Button("替换", role: .destructive) {
-                workspace.confirmPomodoroReplacement()
+            Button(workspace.isPendingPomodoroRestart ? "确认" : "替换", role: .destructive) {
+                workspace.confirmPomodoroStart()
             }
         } message: {
-            Text("替换后，当前任务会被自动取消。")
+            Text(
+                workspace.isPendingPomodoroRestart
+                    ? "确认后将重置任务运行时间。"
+                    : "替换后，当前任务会将被取消。"
+            )
         }
     }
 }

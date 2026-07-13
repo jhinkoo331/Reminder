@@ -305,8 +305,7 @@ final class ReminderWorkspace: ObservableObject {
             preset: preset
         )
 
-        if pomodoro.hasRunningSession,
-           !pomodoro.isActive(listID: listID, reminderID: reminder.id) {
+        if pomodoro.hasRunningSession {
             pendingPomodoroStart = request
             return
         }
@@ -314,11 +313,22 @@ final class ReminderWorkspace: ObservableObject {
         startPomodoro(request)
     }
 
-    var isPomodoroReplacementConfirmationPresented: Bool {
+    var isPomodoroStartConfirmationPresented: Bool {
         pendingPomodoroStart != nil
     }
 
-    func confirmPomodoroReplacement() {
+    var isPendingPomodoroRestart: Bool {
+        guard let pendingPomodoroStart else {
+            return false
+        }
+
+        return pomodoro.isActive(
+            listID: pendingPomodoroStart.listID,
+            reminderID: pendingPomodoroStart.reminder.id
+        )
+    }
+
+    func confirmPomodoroStart() {
         guard let pendingPomodoroStart else {
             return
         }
@@ -327,7 +337,7 @@ final class ReminderWorkspace: ObservableObject {
         startPomodoro(pendingPomodoroStart)
     }
 
-    func cancelPomodoroReplacement() {
+    func cancelPomodoroStart() {
         pendingPomodoroStart = nil
     }
 

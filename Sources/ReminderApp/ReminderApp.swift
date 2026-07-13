@@ -104,6 +104,9 @@ struct ReminderApplication: App {
 
                 Divider()
 
+                Button("预览模式") {}
+                    .disabled(true)
+
                 ForEach(DisplayMode.allCases) { mode in
                     Toggle(
                         mode.rawValue,
@@ -119,6 +122,9 @@ struct ReminderApplication: App {
                 }
 
                 Divider()
+
+                Button("任务信息") {}
+                    .disabled(true)
 
                 ForEach(ReminderAttribute.allCases) { attribute in
                     Toggle(
@@ -139,6 +145,9 @@ struct ReminderApplication: App {
                 )
 
                 Divider()
+
+                Button("按任务状态过滤") {}
+                    .disabled(true)
 
                 ForEach(Reminder.Status.allCases) { status in
                     Toggle(
@@ -185,13 +194,15 @@ struct ReminderApplication: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyDownMonitor: Any?
     private let actionMenuHeaderStyler = ActionMenuHeaderStyler()
+    private let viewMenuHeaderStyler = ViewMenuHeaderStyler()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
-        DispatchQueue.main.async { [actionMenuHeaderStyler] in
+        DispatchQueue.main.async { [actionMenuHeaderStyler, viewMenuHeaderStyler] in
             actionMenuHeaderStyler.apply()
+            viewMenuHeaderStyler.apply()
         }
 
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -214,8 +225,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func configureActionMenuAppearance() {
-        DispatchQueue.main.async { [actionMenuHeaderStyler] in
+        DispatchQueue.main.async { [actionMenuHeaderStyler, viewMenuHeaderStyler] in
             actionMenuHeaderStyler.apply()
+            viewMenuHeaderStyler.apply()
         }
     }
 }
@@ -245,6 +257,44 @@ private final class ActionMenuHeaderStyler: NSObject, NSMenuDelegate {
         pomodoroHeader.view = MenuSectionTitleView(title: "番茄任务")
         for item in actionMenu.items where item !== pomodoroHeader {
             item.indentationLevel = 2
+        }
+    }
+}
+
+private final class ViewMenuHeaderStyler: NSObject, NSMenuDelegate {
+    private let headerTitles = [
+        "预览模式",
+        "任务信息",
+        "按任务状态过滤",
+        "按创建时间筛选"
+    ]
+
+    func apply() {
+        guard let viewMenu = NSApp.mainMenu?.items
+            .compactMap({ $0.submenu })
+            .first(where: { menu in
+                headerTitles.allSatisfy { title in
+                    menu.items.contains(where: { $0.title == title && !$0.isEnabled })
+                }
+            })
+        else {
+            return
+        }
+
+        viewMenu.delegate = self
+        apply(to: viewMenu)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        apply(to: menu)
+    }
+
+    private func apply(to menu: NSMenu) {
+        for title in headerTitles {
+            guard let header = menu.items.first(where: { $0.title == title && !$0.isEnabled }) else {
+                continue
+            }
+            header.view = MenuSectionTitleView(title: title, leadingInset: 32)
         }
     }
 }
