@@ -19,6 +19,26 @@ struct ContentView: View {
         .onChange(of: workspace.selectedListID) { _ in
             workspace.persistConfiguration()
         }
+        .alert(
+            "是否替换当前任务？？",
+            isPresented: Binding(
+                get: { workspace.isPomodoroReplacementConfirmationPresented },
+                set: { isPresented in
+                    if !isPresented {
+                        workspace.cancelPomodoroReplacement()
+                    }
+                }
+            )
+        ) {
+            Button("取消", role: .cancel) {
+                workspace.cancelPomodoroReplacement()
+            }
+            Button("替换", role: .destructive) {
+                workspace.confirmPomodoroReplacement()
+            }
+        } message: {
+            Text("替换后，当前任务会被自动取消。")
+        }
     }
 }
 
@@ -251,7 +271,7 @@ struct ReminderListRow: View {
     }
 
     private var pendingReminderCount: Int {
-        displayedReminders.filter { $0.status == .todo }.count
+        displayedReminders.filter { $0.status == .todo || $0.status == .workingOn }.count
     }
 
     private var activeReminderCount: Int {
@@ -364,6 +384,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var workspace: ReminderWorkspace
     @State private var selectedPane: SettingsPane = .general
     @State private var language = "中文"
     @State private var colorMode = "system"
@@ -452,7 +473,7 @@ HStack {
 
                 ForEach(workspace.customPriorities) { priority in
                     PriorityEditorRow(priority: priority, isSystem: false) {
-                        priorityPendingDeletion = priority
+                        workspace.removeCustomPriority(id: priority.id)
                     }
                 }
 
@@ -533,7 +554,7 @@ HStack {
 
                 ForEach(workspace.customPomodoroPresets) { preset in
                     PomodoroPresetEditorRow(preset: preset, isSystem: false) {
-                        pomodoroPresetPendingDeletion = preset
+                        workspace.removeCustomPomodoroPreset(id: preset.id)
                     }
                 }
 
@@ -568,6 +589,7 @@ HStack {
                     )
                 }
                     }
+                }
                 }
 
                 if selectedPane == .action {

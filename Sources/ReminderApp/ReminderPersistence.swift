@@ -167,7 +167,7 @@ func restoreWorkDirectory() {
         let header = configurationHeader(for: configurationURL)
         let content = [
             header,
-            "version: 1",
+            "version: 2",
             "work_directory: \(yamlQuoted(workDirectoryURL.path(percentEncoded: false)))",
             "display_mode: \(displayMode.rawValue)",
             "color_mode: \(colorMode.rawValue)",
@@ -246,7 +246,8 @@ func restoreWorkDirectory() {
             let content = try String(contentsOf: configurationURL, encoding: .utf8)
             var selectedList: String?
             var attributes = Set<ReminderAttribute>()
-            var statuses: Set<Reminder.Status> = [.todo, .done, .canceled]
+            var statuses: Set<Reminder.Status> = [.todo, .workingOn, .done, .canceled]
+            var configuredVersion = 1
             var priorities: [PriorityDefinition] = []
             var configuredDefaults: [PriorityDefinition] = []
             var pomodoroPresets: [PomodoroDurationPreset] = []
@@ -389,6 +390,11 @@ func restoreWorkDirectory() {
                     displayMode = mode
                 }
 
+                if let value = yamlValue(for: "version", in: trimmed),
+                   let version = Int(value) {
+                    configuredVersion = version
+                }
+
                 if let value = yamlValue(for: "color_mode", in: trimmed),
                    let mode = ColorMode(rawValue: value) {
                     colorMode = mode
@@ -405,6 +411,9 @@ func restoreWorkDirectory() {
             }
 
             visibleReminderAttributes = attributes
+            if configuredVersion < 2 {
+                statuses.insert(.workingOn)
+            }
             visibleReminderStatuses = statuses
             defaultPriorities = PriorityDefinition.defaults.map { builtIn in
                 guard let configured = configuredDefaults.first(where: { $0.id == builtIn.id }) else {

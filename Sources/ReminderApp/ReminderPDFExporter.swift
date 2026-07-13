@@ -292,6 +292,10 @@ enum ReminderPDFExporter {
                 color.setStroke()
                 path.lineWidth = 1.5
                 path.stroke()
+            case .workingOn:
+                color = .systemBlue
+                color.setFill()
+                path.fill()
             case .done:
                 color = .systemGreen
                 color.setFill()

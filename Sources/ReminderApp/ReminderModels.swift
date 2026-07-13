@@ -48,6 +48,7 @@ struct ReminderSearchRequest: Identifiable {
 struct Reminder: Identifiable, Hashable {
     enum Status: String, Codable, CaseIterable, Hashable, Identifiable {
         case todo = "TODO"
+        case workingOn = "WORKING_ON"
         case done = "DONE"
         case canceled = "CANCELED"
         case deleted = "DELETED"
@@ -58,6 +59,8 @@ struct Reminder: Identifiable, Hashable {
             switch self {
             case .todo:
                 return "Todo"
+            case .workingOn:
+                return "Working on"
             case .done:
                 return "Done"
             case .canceled:
@@ -70,6 +73,8 @@ struct Reminder: Identifiable, Hashable {
         var next: Self {
             switch self {
             case .todo:
+                return .workingOn
+            case .workingOn:
                 return .done
             case .done:
                 return .canceled

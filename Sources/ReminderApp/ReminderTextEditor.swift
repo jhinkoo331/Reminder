@@ -355,7 +355,7 @@ final class ReminderEditingTextView: NSTextView {
         menu.addItem(.separator())
 
         menu.addItem(sectionTitle("Status"))
-        for status in [Reminder.Status.todo, .done, .canceled] {
+        for status in [Reminder.Status.todo, .workingOn, .done, .canceled] {
             let item = NSMenuItem(
                 title: status.displayName,
                 action: #selector(selectStatus(_:)),

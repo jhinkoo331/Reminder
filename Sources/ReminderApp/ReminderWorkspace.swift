@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+private struct PendingPomodoroStart {
+    let reminder: Reminder
+    let listID: ReminderListFile.ID
+    let listName: String
+    let preset: PomodoroDurationPreset
+}
+
 @MainActor
 final class ReminderWorkspace: ObservableObject {
     @Published var workDirectoryURL: URL?
@@ -13,7 +20,7 @@ final class ReminderWorkspace: ObservableObject {
     @Published var customPriorities: [PriorityDefinition] = []
     @Published var customPomodoroPresets: [PomodoroDurationPreset] = []
     @Published var visibleReminderAttributes: Set<ReminderAttribute> = []
-    @Published var visibleReminderStatuses: Set<Reminder.Status> = [.todo, .done, .canceled]
+    @Published var visibleReminderStatuses: Set<Reminder.Status> = [.todo, .workingOn, .done, .canceled]
     @Published var showsTaskNumbers = false
     @Published var copiesTaskNumbers = false
     @Published var playsCopySound = true
@@ -26,6 +33,7 @@ final class ReminderWorkspace: ObservableObject {
     @Published var focusRequest: ReminderFocusRequest?
     @Published var searchRequest: ReminderSearchRequest?
     @Published var errorMessage: String?
+    @Published private var pendingPomodoroStart: PendingPomodoroStart?
 
     @Published private(set) var activeReminderListID: ReminderListFile.ID?
     @Published private(set) var activeReminderID: Reminder.ID?
@@ -240,8 +248,37 @@ final class ReminderWorkspace: ObservableObject {
             return
         }
 
-        setActiveReminder(listID: listID, reminderID: reminder.id)
-        pomodoro.start(listID: listID, listName: list.name, reminder: reminder, preset: preset)
+        let request = PendingPomodoroStart(
+            reminder: reminder,
+            listID: listID,
+            listName: list.name,
+            preset: preset
+        )
+
+        if pomodoro.hasRunningSession,
+           !pomodoro.isActive(listID: listID, reminderID: reminder.id) {
+            pendingPomodoroStart = request
+            return
+        }
+
+        startPomodoro(request)
+    }
+
+    var isPomodoroReplacementConfirmationPresented: Bool {
+        pendingPomodoroStart != nil
+    }
+
+    func confirmPomodoroReplacement() {
+        guard let pendingPomodoroStart else {
+            return
+        }
+
+        self.pendingPomodoroStart = nil
+        startPomodoro(pendingPomodoroStart)
+    }
+
+    func cancelPomodoroReplacement() {
+        pendingPomodoroStart = nil
     }
 
     func setActiveReminder(listID: ReminderListFile.ID, reminderID: Reminder.ID) {
@@ -261,6 +298,16 @@ final class ReminderWorkspace: ObservableObject {
         }
 
         startPomodoro(for: activeReminder, in: listID, presetID: presetID)
+    }
+
+    private func startPomodoro(_ request: PendingPomodoroStart) {
+        setActiveReminder(listID: request.listID, reminderID: request.reminder.id)
+        pomodoro.start(
+            listID: request.listID,
+            listName: request.listName,
+            reminder: request.reminder,
+            preset: request.preset
+        )
     }
 
     private var activeReminder: Reminder? {

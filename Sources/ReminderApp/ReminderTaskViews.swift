@@ -967,7 +967,7 @@ struct RenderedReminderRow: View {
             HStack(alignment: .top, spacing: 8) {
             ReminderStatusButton(
                 iconName: iconName,
-                color: NSColor(hex: priority.colorHex),
+                color: statusColor,
                 accessibilityLabel: reminder.status.displayName,
                 action: onToggleStatus
             )
@@ -1087,6 +1087,8 @@ struct RenderedReminderRow: View {
         switch reminder.status {
         case .todo:
             return "circle"
+        case .workingOn:
+            return "circle.inset.filled"
         case .done:
             return "checkmark.circle.fill"
         case .canceled:
@@ -1094,6 +1096,12 @@ struct RenderedReminderRow: View {
         case .deleted:
             return "trash.circle.fill"
         }
+    }
+
+    private var statusColor: NSColor {
+        reminder.status == .workingOn
+            ? .systemBlue
+            : NSColor(hex: priority.colorHex)
     }
 
     private var textColor: NSColor {

@@ -221,6 +221,10 @@ final class PomodoroController: ObservableObject {
         activeSession?.listID == listID && activeSession?.reminderID == reminderID
     }
 
+    var hasRunningSession: Bool {
+        activeSession != nil && remainingSeconds > 0
+    }
+
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -306,6 +310,7 @@ private final class PomodoroMenuBarPresenter: NSResponder {
         warningRemainingRatio: Double,
         warningRemainingMinutes: Int
     ) {
+        let hasChangedSession = activeSession?.id != session.id
         activeSession = session
         self.remainingSeconds = remainingSeconds
         let item: NSStatusItem
@@ -359,6 +364,10 @@ private final class PomodoroMenuBarPresenter: NSResponder {
             let popover = NSPopover()
             popover.behavior = .transient
             detailsPopover = popover
+        }
+
+        if hasChangedSession || detailsPopover?.contentViewController == nil {
+            isDetailsExpanded = false
             updateDetailsPopover()
         }
     }
