@@ -677,6 +677,7 @@ private struct PomodoroTimingSettings: View {
 
             HStack(spacing: 6) {
                 Text("当任务时间小于总时间的")
+                    .fixedSize(horizontal: true, vertical: false)
 
                 TextField(
                     "",
@@ -690,6 +691,7 @@ private struct PomodoroTimingSettings: View {
                 .frame(width: 52)
 
                 Text("%，且剩余时间小于")
+                    .fixedSize(horizontal: true, vertical: false)
 
                 TextField(
                     "",
@@ -703,6 +705,9 @@ private struct PomodoroTimingSettings: View {
                 .frame(width: 52)
 
                 Text("分钟时，将任务标红")
+                    .fixedSize(horizontal: true, vertical: false)
+
+                Spacer(minLength: 0)
             }
 
             ForEach(PomodoroDurationPreset.defaults) { preset in

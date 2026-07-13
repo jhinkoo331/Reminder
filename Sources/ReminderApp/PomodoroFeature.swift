@@ -762,9 +762,11 @@ private final class PomodoroStatusBarView: NSView {
 
         taskLabel.font = .systemFont(ofSize: 10, weight: .medium)
         taskLabel.lineBreakMode = .byTruncatingTail
+        taskLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         timeLabel.alignment = .right
         timeLabel.textColor = .secondaryLabelColor
+        timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let labels = NSStackView(views: [taskLabel, timeLabel])
         labels.orientation = .horizontal
@@ -806,7 +808,7 @@ private final class PomodoroStatusBarView: NSView {
         let elapsedSeconds = max(0, session.durationSeconds - remainingSeconds)
         taskLabel.stringValue = remainingSeconds == 0
             ? "已结束"
-            : session.taskText.singleLinePrefix
+            : session.taskText.singleLineDisplay
         timeLabel.stringValue = "\(elapsedSeconds.pomodoroElapsedMinutes)/\(session.durationSeconds.pomodoroMinutes)min"
         progressBar.progress = PomodoroProgressStyle.fraction(
             remainingSeconds: remainingSeconds,
@@ -1048,10 +1050,9 @@ private struct PomodoroCardProgressBar: View {
 }
 
 private extension String {
-    var singleLinePrefix: String {
-        let value = replacingOccurrences(of: "\n", with: " ")
+    var singleLineDisplay: String {
+        replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(value.prefix(18))
     }
 
     var needsExpansion: Bool {
