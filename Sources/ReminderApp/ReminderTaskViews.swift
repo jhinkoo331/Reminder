@@ -546,7 +546,7 @@ struct RenderedReminderList: View {
     private func createFirstReminder() {
         let timestamp = ReminderTextParser.currentTimestamp()
         let reminder = Reminder(
-            id: "\(timestamp)-0",
+            id: ReminderTextParser.makeIdentifier(),
             createTime: timestamp,
             deadline: timestamp,
             level: 1,
@@ -581,7 +581,7 @@ struct RenderedReminderList: View {
         let timestamp = ReminderTextParser.currentTimestamp()
         let level = editableReminders[index].level
         let newReminder = Reminder(
-            id: "\(timestamp)-\(index + 1)",
+            id: ReminderTextParser.makeIdentifier(),
             createTime: timestamp,
             deadline: timestamp,
             level: level,
@@ -606,7 +606,7 @@ struct RenderedReminderList: View {
         let timestamp = ReminderTextParser.currentTimestamp()
         let level = editableReminders[index].level
         let newReminder = Reminder(
-            id: "\(timestamp)-\(index)",
+            id: ReminderTextParser.makeIdentifier(),
             createTime: timestamp,
             deadline: timestamp,
             level: level,

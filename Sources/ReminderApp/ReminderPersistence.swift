@@ -1,17 +1,17 @@
 import Foundation
 
 struct ReminderMetadata: Decodable {
+    let id: String
     let createTime: String
     let deadline: String
-    let level: Int
     let status: Reminder.Status
     let priority: String?
     let images: [ReminderImageAttachment]?
 
     enum CodingKeys: String, CodingKey {
+        case id = "ID"
         case createTime = "CreateTime"
         case deadline = "Deadline"
-        case level = "Level"
         case status = "Status"
         case priority = "Priority"
         case images = "Images"
@@ -19,7 +19,10 @@ struct ReminderMetadata: Decodable {
 }
 
 enum ReminderTextParser {
-    static func parse(_ source: String) -> [Reminder] {
+    static func parse(
+        _ source: String,
+        configuration: MarkdownTaskConfiguration
+    ) -> [Reminder] {
         let lines = source
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
@@ -28,26 +31,36 @@ enum ReminderTextParser {
         var index = 0
 
         while index + 1 < lines.count {
-            let metadataLine = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            let textLine = lines[index + 1]
-            index += 2
+            let taskLine = lines[index]
+            let metadataLine = lines[index + 1]
 
-            guard !metadataLine.isEmpty,
-                  let data = metadataLine.data(using: .utf8),
+            guard let task = markdownTask(from: taskLine),
+                  let metadataJSON = metadataJSON(
+                      from: metadataLine,
+                      expectedIndentation: task.indentation + 6
+                  ),
+                  let data = metadataJSON.data(using: .utf8),
                   let metadata = try? JSONDecoder().decode(ReminderMetadata.self, from: data)
             else {
+                index += 1
                 continue
             }
 
+            index += 2
+            let resolvedStatus = configuration.status(
+                metadataStatus: metadata.status,
+                checkbox: task.checkbox
+            )
+
             reminders.append(
                 Reminder(
-                    id: "\(metadata.createTime)-\(reminders.count)",
+                    id: metadata.id,
                     createTime: metadata.createTime,
                     deadline: metadata.deadline,
-                    level: max(metadata.level, 1),
-                    status: metadata.status,
+                    level: task.indentation / 2 + 1,
+                    status: resolvedStatus,
                     priorityID: metadata.priority ?? PriorityDefinition.normal.id,
-                    text: textLine,
+                    text: task.text,
                     images: metadata.images ?? []
                 )
             )
@@ -56,10 +69,17 @@ enum ReminderTextParser {
         return reminders
     }
 
-    static func serialize(_ reminders: [Reminder]) -> String {
+    static func serialize(
+        _ reminders: [Reminder],
+        configuration: MarkdownTaskConfiguration
+    ) -> String {
         reminders
             .map { reminder in
-                "\(metadataLine(for: reminder))\n\(reminder.text)"
+                let indentation = String(repeating: " ", count: max(reminder.level - 1, 0) * 2)
+                let marker = configuration.checkbox(for: reminder.status).marker
+                let taskLine = "\(indentation)- \(marker) \(singleLineText(reminder.text))"
+                let metadataIndentation = indentation + String(repeating: " ", count: 6)
+                return "\(taskLine)\n\(metadataIndentation)<!-- version: v1 \(metadataJSON(for: reminder)) -->"
             }
             .joined(separator: "\n")
     }
@@ -70,11 +90,20 @@ enum ReminderTextParser {
         return formatter.string(from: Date())
     }
 
-    private static func metadataLine(for reminder: Reminder) -> String {
+    static func makeIdentifier(date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMddHHmmss"
+        let alphabet = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        let suffix = String((0..<6).map { _ in alphabet.randomElement() ?? "0" })
+        return "\(formatter.string(from: date))-\(suffix)"
+    }
+
+    private static func metadataJSON(for reminder: Reminder) -> String {
         var parts = [
+            "\"ID\":\"\(jsonEscaped(reminder.id))\"",
             "\"CreateTime\":\"\(jsonEscaped(reminder.createTime))\"",
             "\"Deadline\":\"\(jsonEscaped(reminder.deadline))\"",
-            "\"Level\":\(reminder.level)",
             "\"Status\":\"\(reminder.status.rawValue)\"",
             "\"Priority\":\"\(jsonEscaped(reminder.priorityID))\""
         ]
@@ -86,6 +115,65 @@ enum ReminderTextParser {
         }
 
         return "{\(parts.joined(separator: ","))}"
+    }
+
+    private static func singleLineText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private static func markdownTask(
+        from line: String
+    ) -> (indentation: Int, checkbox: MarkdownCheckboxState, text: String)? {
+        let indentation = line.prefix(while: { $0 == " " }).count
+        guard indentation.isMultiple(of: 2) else {
+            return nil
+        }
+
+        let content = String(line.dropFirst(indentation))
+        guard content.hasPrefix("- ["), content.count >= 6 else {
+            return nil
+        }
+
+        let markerStart = content.index(content.startIndex, offsetBy: 3)
+        let marker = content[markerStart]
+        let closingBracket = content.index(after: markerStart)
+        let trailingSpace = content.index(after: closingBracket)
+        guard content[closingBracket] == "]",
+              content.indices.contains(trailingSpace),
+              content[trailingSpace] == " "
+        else {
+            return nil
+        }
+
+        let checkbox: MarkdownCheckboxState
+        switch marker {
+        case " ": checkbox = .unchecked
+        case "x", "X": checkbox = .checked
+        default: return nil
+        }
+
+        let textStart = content.index(after: trailingSpace)
+        return (indentation, checkbox, String(content[textStart...]))
+    }
+
+    private static func metadataJSON(
+        from line: String,
+        expectedIndentation: Int
+    ) -> String? {
+        let indentation = line.prefix(while: { $0 == " " }).count
+        guard indentation == expectedIndentation else {
+            return nil
+        }
+
+        let content = line.dropFirst(indentation)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "<!-- version: v1 "
+        let suffix = " -->"
+        guard content.hasPrefix(prefix), content.hasSuffix(suffix) else {
+            return nil
+        }
+
+        return String(content.dropFirst(prefix.count).dropLast(suffix.count))
     }
 
     private static func jsonEscaped(_ value: String) -> String {
@@ -145,6 +233,17 @@ func restoreWorkDirectory() {
             : "custom_pomodoro_presets:\n" + customPomodoroPresets
                 .map { "  - \(yamlQuoted($0.encodedValue))" }
                 .joined(separator: "\n")
+        let reminderStatusConfigurationLines = (["statuses:"] + Reminder.Status.allCases.flatMap { status in
+            [
+                "  \(status.rawValue):",
+                "    markdown_checkbox: \(markdownTaskConfiguration.checkbox(for: status).rawValue)"
+            ]
+        }).joined(separator: "\n")
+        let markdownTaskLines = [
+            "markdown_task:",
+            "  checked_target_status: \(markdownTaskConfiguration.checkedTargetStatus.rawValue)",
+            "  unchecked_target_status: \(markdownTaskConfiguration.uncheckedTargetStatus.rawValue)"
+        ].joined(separator: "\n")
         let interfaceLines = [
             "interface:",
             "  show_task_numbers: \(showsTaskNumbers)",
@@ -179,6 +278,8 @@ func restoreWorkDirectory() {
             pomodoroConfigurationLines,
             attributeLines,
             statusLines,
+            reminderStatusConfigurationLines,
+            markdownTaskLines,
             defaultPriorityLines,
             customPriorityLines,
             pomodoroPresetLines,
@@ -236,6 +337,7 @@ func restoreWorkDirectory() {
             pomodoroWarningRemainingMinutes = 15
             pomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
             creationTimeFilter = nil
+            markdownTaskConfiguration = .default
             pomodoro.configureWarningThresholds(
                 remainingRatio: pomodoroWarningRemainingRatio,
                 remainingMinutes: pomodoroWarningRemainingMinutes
@@ -271,10 +373,42 @@ func restoreWorkDirectory() {
             var configuredPomodoroWarningMinutes = 15
             var configuredPomodoroMenuBarWidth = PomodoroMenuBarWidth.defaultValue
             var configuredCreationTimeFilter: CreationTimeFilter?
+            var configuredMarkdownTask = MarkdownTaskConfiguration.default
+            var isReadingReminderStatusConfigurations = false
+            var isReadingMarkdownTask = false
+            var currentConfiguredStatus: Reminder.Status?
 
             for line in content.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 let isIndented = line.first?.isWhitespace == true
+                let indentation = line.prefix(while: { $0 == " " }).count
+
+                if isReadingReminderStatusConfigurations {
+                    if indentation == 2,
+                       trimmed.hasSuffix(":"),
+                       let status = Reminder.Status(rawValue: String(trimmed.dropLast())) {
+                        currentConfiguredStatus = status
+                    } else if indentation == 4,
+                              let status = currentConfiguredStatus,
+                              let value = yamlValue(for: "markdown_checkbox", in: trimmed),
+                              let checkbox = MarkdownCheckboxState(rawValue: value) {
+                        configuredMarkdownTask.statuses[status] = ReminderStatusConfiguration(
+                            markdownCheckbox: checkbox
+                        )
+                    }
+                }
+
+                if isReadingMarkdownTask, isIndented {
+                    if let value = yamlValue(for: "checked_target_status", in: trimmed),
+                       let status = Reminder.Status(rawValue: value) {
+                        configuredMarkdownTask.checkedTargetStatus = status
+                    }
+
+                    if let value = yamlValue(for: "unchecked_target_status", in: trimmed),
+                       let status = Reminder.Status(rawValue: value) {
+                        configuredMarkdownTask.uncheckedTargetStatus = status
+                    }
+                }
 
                 if isReadingInterface, isIndented {
                     if let value = yamlValue(for: "show_task_numbers", in: trimmed),
@@ -382,6 +516,9 @@ func restoreWorkDirectory() {
                     isReadingInterface = trimmed == "interface:"
                     isReadingSearch = trimmed == "search:"
                     isReadingPomodoroConfiguration = trimmed == "pomodoro:"
+                    isReadingReminderStatusConfigurations = trimmed == "statuses:"
+                    isReadingMarkdownTask = trimmed == "markdown_task:"
+                    currentConfiguredStatus = nil
                 }
 
                 if trimmed == "visible_statuses:" || trimmed == "visible_statuses: []" {
@@ -448,6 +585,8 @@ func restoreWorkDirectory() {
             pomodoroWarningRemainingMinutes = configuredPomodoroWarningMinutes
             pomodoroMenuBarWidth = configuredPomodoroMenuBarWidth
             creationTimeFilter = configuredCreationTimeFilter
+            configuredMarkdownTask.normalize()
+            markdownTaskConfiguration = configuredMarkdownTask
             pomodoro.configureWarningThresholds(
                 remainingRatio: configuredPomodoroWarningRatio,
                 remainingMinutes: configuredPomodoroWarningMinutes
@@ -482,11 +621,11 @@ func restoreWorkDirectory() {
             .replacingOccurrences(of: "\\\\", with: "\\")
     }
 
-    func uniqueTXTFileURL(for requestedName: String, in directoryURL: URL, excluding excludedURL: URL? = nil) -> URL {
+    func uniqueMarkdownFileURL(for requestedName: String, in directoryURL: URL, excluding excludedURL: URL? = nil) -> URL {
         let sanitizedName = sanitizedListName(from: requestedName)
         var candidateURL = directoryURL
             .appendingPathComponent(sanitizedName)
-            .appendingPathExtension("txt")
+            .appendingPathExtension("md")
             .standardizedFileURL
 
         let excludedPath = excludedURL?.standardizedFileURL.path(percentEncoded: false)
@@ -498,7 +637,7 @@ func restoreWorkDirectory() {
         while FileManager.default.fileExists(atPath: candidateURL.path(percentEncoded: false)) {
             candidateURL = directoryURL
                 .appendingPathComponent("\(sanitizedName) \(suffix)")
-                .appendingPathExtension("txt")
+                .appendingPathExtension("md")
                 .standardizedFileURL
 
             if candidateURL.path(percentEncoded: false) == excludedPath {

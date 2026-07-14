@@ -6,10 +6,14 @@ final class ReminderListFile: Identifiable, Hashable {
     var rawText: String
     var reminders: [Reminder]
 
-    init(fileURL: URL, rawText: String) {
+    init(
+        fileURL: URL,
+        rawText: String,
+        markdownConfiguration: MarkdownTaskConfiguration
+    ) {
         self.fileURL = fileURL
         self.rawText = rawText
-        reminders = ReminderTextParser.parse(rawText)
+        reminders = ReminderTextParser.parse(rawText, configuration: markdownConfiguration)
     }
 
     static func == (lhs: ReminderListFile, rhs: ReminderListFile) -> Bool {
@@ -98,6 +102,79 @@ struct Reminder: Identifiable, Hashable {
     var title: String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "未命名事项" : trimmed
+    }
+}
+
+enum MarkdownCheckboxState: String, CaseIterable, Identifiable {
+    case unchecked
+    case checked
+
+    var id: Self { self }
+
+    var marker: String {
+        switch self {
+        case .unchecked: "[ ]"
+        case .checked: "[x]"
+        }
+    }
+
+    var displayName: String { marker }
+}
+
+struct ReminderStatusConfiguration: Equatable {
+    var markdownCheckbox: MarkdownCheckboxState
+}
+
+struct MarkdownTaskConfiguration: Equatable {
+    var statuses: [Reminder.Status: ReminderStatusConfiguration]
+    var checkedTargetStatus: Reminder.Status
+    var uncheckedTargetStatus: Reminder.Status
+
+    static let `default` = MarkdownTaskConfiguration(
+        statuses: [
+            .todo: ReminderStatusConfiguration(markdownCheckbox: .unchecked),
+            .workingOn: ReminderStatusConfiguration(markdownCheckbox: .unchecked),
+            .done: ReminderStatusConfiguration(markdownCheckbox: .checked),
+            .canceled: ReminderStatusConfiguration(markdownCheckbox: .checked),
+            .deleted: ReminderStatusConfiguration(markdownCheckbox: .checked)
+        ],
+        checkedTargetStatus: .done,
+        uncheckedTargetStatus: .todo
+    )
+
+    func checkbox(for status: Reminder.Status) -> MarkdownCheckboxState {
+        statuses[status]?.markdownCheckbox
+            ?? Self.default.statuses[status]?.markdownCheckbox
+            ?? .unchecked
+    }
+
+    func status(
+        metadataStatus: Reminder.Status,
+        checkbox: MarkdownCheckboxState
+    ) -> Reminder.Status {
+        guard self.checkbox(for: metadataStatus) != checkbox else {
+            return metadataStatus
+        }
+
+        return checkbox == .checked ? checkedTargetStatus : uncheckedTargetStatus
+    }
+
+    mutating func normalize() {
+        for status in Reminder.Status.allCases where statuses[status] == nil {
+            statuses[status] = Self.default.statuses[status]
+        }
+
+        if checkbox(for: checkedTargetStatus) != .checked {
+            checkedTargetStatus = Reminder.Status.allCases.first {
+                checkbox(for: $0) == .checked
+            } ?? .done
+        }
+
+        if checkbox(for: uncheckedTargetStatus) != .unchecked {
+            uncheckedTargetStatus = Reminder.Status.allCases.first {
+                checkbox(for: $0) == .unchecked
+            } ?? .todo
+        }
     }
 }
 

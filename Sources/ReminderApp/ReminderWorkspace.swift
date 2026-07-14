@@ -21,6 +21,7 @@ final class ReminderWorkspace: ObservableObject {
     @Published var customPomodoroPresets: [PomodoroDurationPreset] = []
     @Published var visibleReminderAttributes: Set<ReminderAttribute> = []
     @Published var visibleReminderStatuses: Set<Reminder.Status> = [.todo, .workingOn, .done, .canceled]
+    @Published var markdownTaskConfiguration = MarkdownTaskConfiguration.default
     @Published var creationTimeFilter: CreationTimeFilter?
     @Published var showsTaskNumbers = false
     @Published var copiesTaskNumbers = false
@@ -104,9 +105,15 @@ final class ReminderWorkspace: ObservableObject {
            let index = lists.firstIndex(where: { $0.id == selectedListID }) {
             switch mode {
             case .source:
-                lists[index].rawText = ReminderTextParser.serialize(lists[index].reminders)
+                lists[index].rawText = ReminderTextParser.serialize(
+                    lists[index].reminders,
+                    configuration: markdownTaskConfiguration
+                )
             case .preview:
-                lists[index].reminders = ReminderTextParser.parse(lists[index].rawText)
+                lists[index].reminders = ReminderTextParser.parse(
+                    lists[index].rawText,
+                    configuration: markdownTaskConfiguration
+                )
             }
         }
 
@@ -213,6 +220,60 @@ final class ReminderWorkspace: ObservableObject {
         }
 
         visibleReminderStatuses = statuses
+        persistConfiguration()
+    }
+
+    func setMarkdownCheckbox(
+        _ checkbox: MarkdownCheckboxState,
+        for status: Reminder.Status
+    ) {
+        var configuration = markdownTaskConfiguration
+        var statusConfiguration = configuration.statuses[status]
+            ?? ReminderStatusConfiguration(markdownCheckbox: checkbox)
+        statusConfiguration.markdownCheckbox = checkbox
+        configuration.statuses[status] = statusConfiguration
+        applyMarkdownTaskConfiguration(configuration)
+    }
+
+    func setCheckedTargetStatus(_ status: Reminder.Status) {
+        var configuration = markdownTaskConfiguration
+        configuration.checkedTargetStatus = status
+        applyMarkdownTaskConfiguration(configuration)
+    }
+
+    func setUncheckedTargetStatus(_ status: Reminder.Status) {
+        var configuration = markdownTaskConfiguration
+        configuration.uncheckedTargetStatus = status
+        applyMarkdownTaskConfiguration(configuration)
+    }
+
+    private func applyMarkdownTaskConfiguration(_ proposedConfiguration: MarkdownTaskConfiguration) {
+        var configuration = proposedConfiguration
+        configuration.normalize()
+        guard configuration != markdownTaskConfiguration else {
+            return
+        }
+
+        flushPendingSaves()
+        let previousConfiguration = markdownTaskConfiguration
+        if displayMode == .source {
+            for list in lists {
+                list.reminders = ReminderTextParser.parse(
+                    list.rawText,
+                    configuration: previousConfiguration
+                )
+            }
+        }
+
+        markdownTaskConfiguration = configuration
+        for index in lists.indices {
+            lists[index].rawText = ReminderTextParser.serialize(
+                lists[index].reminders,
+                configuration: configuration
+            )
+            scheduleSave(at: index)
+        }
+        flushPendingSaves()
         persistConfiguration()
     }
 
@@ -488,7 +549,7 @@ final class ReminderWorkspace: ObservableObject {
 
         let timestamp = ReminderTextParser.currentTimestamp()
         let reminder = Reminder(
-            id: "\(timestamp)-0",
+            id: ReminderTextParser.makeIdentifier(),
             createTime: timestamp,
             deadline: timestamp,
             level: 1,
@@ -544,7 +605,10 @@ final class ReminderWorkspace: ObservableObject {
             lists[index].reminders = nonEmptyReminders
         }
 
-        lists[index].rawText = ReminderTextParser.serialize(lists[index].reminders)
+        lists[index].rawText = ReminderTextParser.serialize(
+            lists[index].reminders,
+            configuration: markdownTaskConfiguration
+        )
         scheduleSave(at: index)
         flushPendingSave(for: lists[index].fileURL)
     }
@@ -572,6 +636,19 @@ final class ReminderWorkspace: ObservableObject {
 
     var workDirectoryDisplayPath: String {
         workDirectoryURL?.path(percentEncoded: false) ?? "未设置"
+    }
+
+    func copyWorkDirectoryPath() {
+        guard let workDirectoryURL else {
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if pasteboard.setString(workDirectoryURL.path(percentEncoded: false), forType: .string),
+           playsCopySound {
+            ReminderCopySound.play()
+        }
     }
 
     func promptForWorkDirectoryIfNeeded() {
@@ -626,15 +703,19 @@ final class ReminderWorkspace: ObservableObject {
                 options: [.skipsHiddenFiles]
             )
 
-            let txtFiles = fileURLs
-                .filter { $0.pathExtension.lowercased() == "txt" }
+            let markdownFiles = fileURLs
+                .filter { $0.pathExtension.lowercased() == "md" }
                 .sorted {
                     $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
                 }
 
-            lists = txtFiles.map { fileURL in
+            lists = markdownFiles.map { fileURL in
                 let text = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
-                return ReminderListFile(fileURL: fileURL, rawText: text)
+                return ReminderListFile(
+                    fileURL: fileURL,
+                    rawText: text,
+                    markdownConfiguration: markdownTaskConfiguration
+                )
             }
 
             if let selectedListID,
@@ -723,7 +804,11 @@ final class ReminderWorkspace: ObservableObject {
     private func scheduleSave(at index: Int) {
         let fileURL = lists[index].fileURL
         let reminders = lists[index].reminders
-        fileSaveQueue.schedule(reminders: reminders, to: fileURL) { [weak self] savedURL, error in
+        fileSaveQueue.schedule(
+            reminders: reminders,
+            markdownConfiguration: markdownTaskConfiguration,
+            to: fileURL
+        ) { [weak self] savedURL, error in
             guard let self else {
                 return
             }
@@ -759,7 +844,7 @@ final class ReminderWorkspace: ObservableObject {
             return false
         }
 
-        let fileURL = uniqueTXTFileURL(for: requestedName, in: workDirectoryURL)
+        let fileURL = uniqueMarkdownFileURL(for: requestedName, in: workDirectoryURL)
 
         do {
             try "".write(to: fileURL, atomically: true, encoding: .utf8)
@@ -780,7 +865,7 @@ final class ReminderWorkspace: ObservableObject {
 
         let oldURL = lists[index].fileURL
         flushPendingSave(for: oldURL)
-        let newURL = uniqueTXTFileURL(
+        let newURL = uniqueMarkdownFileURL(
             for: requestedName,
             in: oldURL.deletingLastPathComponent(),
             excluding: oldURL

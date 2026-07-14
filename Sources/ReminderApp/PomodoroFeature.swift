@@ -298,6 +298,8 @@ private final class PomodoroMenuBarPresenter: NSResponder, NSWindowDelegate {
     private var statusView: PomodoroStatusBarView?
     private weak var statusButton: NSStatusBarButton?
     private var statusButtonTrackingArea: NSTrackingArea?
+    private var localMouseDownMonitor: Any?
+    private var globalMouseDownMonitor: Any?
     private var detailsPanel: PomodoroCardPanel?
     private var detailsHostingController: NSHostingController<PomodoroStatusCardView>?
     private var floatingPanel: PomodoroCardPanel?
@@ -420,6 +422,7 @@ private final class PomodoroMenuBarPresenter: NSResponder, NSWindowDelegate {
         floatingPanel?.close()
         floatingPanel = nil
         floatingHostingController = nil
+        stopOutsideClickMonitoring()
         popoverDismissWorkItem?.cancel()
         popoverDismissWorkItem = nil
         isPointerInsideStatusItem = false
@@ -453,12 +456,14 @@ private final class PomodoroMenuBarPresenter: NSResponder, NSWindowDelegate {
                 dismissDetailsPanel()
             } else {
                 isDetailsOpenedByClick = true
+                startOutsideClickMonitoring()
                 positionDetailsPanel(detailsPanel)
                 detailsPanel.makeKeyAndOrderFront(nil)
             }
         } else {
             isDetailsOpenedByClick = true
             showDetails(activating: true)
+            startOutsideClickMonitoring()
         }
     }
 
@@ -656,6 +661,7 @@ private final class PomodoroMenuBarPresenter: NSResponder, NSWindowDelegate {
 
         if isPinned {
             isDetailsOpenedByClick = false
+            stopOutsideClickMonitoring()
             detailsPanel?.orderOut(nil)
             updateFloatingPanel()
         } else {
@@ -702,25 +708,64 @@ private final class PomodoroMenuBarPresenter: NSResponder, NSWindowDelegate {
 
     private func dismissDetailsPanel() {
         isDetailsOpenedByClick = false
+        stopOutsideClickMonitoring()
         detailsPanel?.orderOut(nil)
     }
 
-    func windowDidResignKey(_ notification: Notification) {
-        guard (notification.object as? NSWindow) === detailsPanel,
-              isDetailsOpenedByClick
-        else {
+    private func startOutsideClickMonitoring() {
+        guard localMouseDownMonitor == nil, globalMouseDownMonitor == nil else {
             return
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  self.isDetailsOpenedByClick,
-                  self.detailsPanel?.isKeyWindow != true
-            else {
-                return
-            }
-            self.dismissDetailsPanel()
+        let mouseDownEvents: NSEvent.EventTypeMask = [
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown
+        ]
+        localMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseDownEvents) {
+            [weak self] event in
+            self?.handleLocalMouseDown(event)
+            return event
         }
+        globalMouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseDownEvents) {
+            [weak self] _ in
+            DispatchQueue.main.async {
+                self?.dismissDetailsPanelIfNeeded()
+            }
+        }
+    }
+
+    private func stopOutsideClickMonitoring() {
+        if let localMouseDownMonitor {
+            NSEvent.removeMonitor(localMouseDownMonitor)
+            self.localMouseDownMonitor = nil
+        }
+        if let globalMouseDownMonitor {
+            NSEvent.removeMonitor(globalMouseDownMonitor)
+            self.globalMouseDownMonitor = nil
+        }
+    }
+
+    private func handleLocalMouseDown(_ event: NSEvent) {
+        guard event.window !== detailsPanel else {
+            return
+        }
+
+        if event.type == .leftMouseDown,
+           let statusButton,
+           event.window === statusButton.window,
+           statusButton.convert(statusButton.bounds, to: nil).contains(event.locationInWindow) {
+            return
+        }
+
+        dismissDetailsPanelIfNeeded()
+    }
+
+    private func dismissDetailsPanelIfNeeded() {
+        guard isDetailsOpenedByClick, !isPinned else {
+            return
+        }
+        dismissDetailsPanel()
     }
 }
 

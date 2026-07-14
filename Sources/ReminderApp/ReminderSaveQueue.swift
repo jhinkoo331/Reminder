@@ -2,13 +2,13 @@ import Foundation
 
 final class ReminderSaveQueue {
     private enum Payload {
-        case reminders([Reminder])
+        case reminders([Reminder], MarkdownTaskConfiguration)
         case rawText(String)
 
         var text: String {
             switch self {
-            case .reminders(let reminders):
-                return ReminderTextParser.serialize(reminders)
+            case .reminders(let reminders, let configuration):
+                return ReminderTextParser.serialize(reminders, configuration: configuration)
             case .rawText(let text):
                 return text
             }
@@ -26,11 +26,17 @@ final class ReminderSaveQueue {
 
     func schedule(
         reminders: [Reminder],
+        markdownConfiguration: MarkdownTaskConfiguration,
         to url: URL,
         delay: TimeInterval = 5,
         completion: @escaping (URL, Error?) -> Void
     ) {
-        schedule(payload: .reminders(reminders), to: url, delay: delay, completion: completion)
+        schedule(
+            payload: .reminders(reminders, markdownConfiguration),
+            to: url,
+            delay: delay,
+            completion: completion
+        )
     }
 
     func schedule(

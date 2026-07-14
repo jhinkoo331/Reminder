@@ -393,7 +393,6 @@ struct SettingsView: View {
     @EnvironmentObject private var workspace: ReminderWorkspace
     @State private var selectedPane: SettingsPane = .general
     @State private var language = "中文"
-    @State private var colorMode = "system"
     @State private var showsTaskNumbers = true
     @State private var playsCopySound = true
     @State private var copiesTaskNumbers = true
@@ -427,10 +426,16 @@ struct SettingsView: View {
                     .frame(width: 170)
                 }
 
-                Picker(isChinese ? "颜色模式" : "Color Mode", selection: $colorMode) {
-                    Text(isChinese ? "浅色" : "Light").tag("light")
-                    Text(isChinese ? "深色" : "Dark").tag("dark")
-                    Text(isChinese ? "跟随系统" : "System").tag("system")
+                Picker(
+                    isChinese ? "颜色模式" : "Color Mode",
+                    selection: Binding(
+                        get: { workspace.colorMode },
+                        set: { workspace.setColorMode($0) }
+                    )
+                ) {
+                    Text(isChinese ? "浅色" : "Light").tag(ColorMode.light)
+                    Text(isChinese ? "深色" : "Dark").tag(ColorMode.dark)
+                    Text(isChinese ? "跟随系统" : "System").tag(ColorMode.system)
                 }
                 .pickerStyle(.segmented)
 
@@ -442,15 +447,6 @@ struct SettingsView: View {
                         set: { workspace.setPlaysCopySound($0) }
                     )
                 )
-
-                Toggle(
-                    "复制时包含任务序号",
-                    isOn: Binding(
-                        get: { workspace.copiesTaskNumbers },
-                        set: { workspace.setCopiesTaskNumbers($0) }
-                    )
-                )
-                .disabled(!workspace.showsTaskNumbers)
 
 HStack {
     Text("完成任务隐藏延迟")
@@ -490,27 +486,50 @@ HStack {
                 }
             }
 
-            Section("工作目录") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(workspace.workDirectoryDisplayPath)
-                        .font(.callout)
-                        .foregroundStyle(workspace.workDirectoryURL == nil ? .secondary : .primary)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
+            Section {
+                LabeledContent(isChinese ? "工作目录" : "Work Directory") {
+                    HStack(spacing: 6) {
+                        Text(workspace.workDirectoryDisplayPath)
+                            .font(.callout)
+                            .foregroundStyle(workspace.workDirectoryURL == nil ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+
+                        Button(action: workspace.copyWorkDirectoryPath) {
+                            Image(systemName: "square.on.square")
+                                .font(.system(size: 11, weight: .regular))
+                                .offset(y: 1)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(workspace.workDirectoryURL == nil)
+                        .help(isChinese ? "复制工作目录" : "Copy Work Directory")
+                        .accessibilityLabel(isChinese ? "复制工作目录" : "Copy Work Directory")
+                    }
                 }
                 HStack(spacing: 12) {
                     SettingsActionButton(
                         isChinese ? "选择工作目录" : "Select",
-                        systemImage: "folder.badge.plus"
+                        systemImage: "folder.badge.plus",
+                        action: workspace.chooseWorkDirectory
                     )
                     SettingsActionButton(
                         isChinese ? "打开目录" : "Open",
-                        systemImage: "folder"
+                        systemImage: "folder",
+                        isDisabled: workspace.workDirectoryURL == nil,
+                        action: workspace.openWorkDirectoryInFinder
                     )
-                    SettingsActionButton("config.yaml", systemImage: "doc.text")
+                    SettingsActionButton(
+                        "config.yaml",
+                        systemImage: "doc.text",
+                        isDisabled: workspace.workDirectoryURL == nil,
+                        action: workspace.openConfigurationFile
+                    )
                     SettingsActionButton(
                         isChinese ? "刷新" : "Refresh",
-                        systemImage: "arrow.triangle.2.circlepath"
+                        systemImage: "arrow.triangle.2.circlepath",
+                        isDisabled: workspace.workDirectoryURL == nil,
+                        action: workspace.reloadLists
                     )
                 }
                     }
@@ -536,6 +555,8 @@ HStack {
                     }
                 }
                     }
+
+                    MarkdownStatusSettings(workspace: workspace, isChinese: isChinese)
                 }
 
                 if selectedPane == .priority {
@@ -652,6 +673,64 @@ private struct SettingsWindowTitle: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             nsView.window?.title = title
+        }
+    }
+}
+
+private struct MarkdownStatusSettings: View {
+    @ObservedObject var workspace: ReminderWorkspace
+    let isChinese: Bool
+
+    var body: some View {
+        Section(isChinese ? "Markdown 任务状态" : "Markdown Task Status") {
+            ForEach(Reminder.Status.allCases) { status in
+                LabeledContent(status.displayName) {
+                    Picker(
+                        "",
+                        selection: Binding(
+                            get: { workspace.markdownTaskConfiguration.checkbox(for: status) },
+                            set: { workspace.setMarkdownCheckbox($0, for: status) }
+                        )
+                    ) {
+                        ForEach(MarkdownCheckboxState.allCases) { checkbox in
+                            Text(checkbox.displayName).tag(checkbox)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 100)
+                }
+            }
+
+            Picker(
+                isChinese ? "勾选后的目标状态" : "Checked Target Status",
+                selection: Binding(
+                    get: { workspace.markdownTaskConfiguration.checkedTargetStatus },
+                    set: { workspace.setCheckedTargetStatus($0) }
+                )
+            ) {
+                ForEach(statuses(for: .checked)) { status in
+                    Text(status.displayName).tag(status)
+                }
+            }
+
+            Picker(
+                isChinese ? "取消勾选后的目标状态" : "Unchecked Target Status",
+                selection: Binding(
+                    get: { workspace.markdownTaskConfiguration.uncheckedTargetStatus },
+                    set: { workspace.setUncheckedTargetStatus($0) }
+                )
+            ) {
+                ForEach(statuses(for: .unchecked)) { status in
+                    Text(status.displayName).tag(status)
+                }
+            }
+        }
+    }
+
+    private func statuses(for checkbox: MarkdownCheckboxState) -> [Reminder.Status] {
+        Reminder.Status.allCases.filter {
+            workspace.markdownTaskConfiguration.checkbox(for: $0) == checkbox
         }
     }
 }
@@ -822,20 +901,30 @@ private struct PomodoroMenuWidthSlider: View {
 private struct SettingsActionButton: View {
     let title: String
     let systemImage: String
+    let isDisabled: Bool
+    let action: () -> Void
 
-    init(_ title: String, systemImage: String) {
+    init(
+        _ title: String,
+        systemImage: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) {
         self.title = title
         self.systemImage = systemImage
+        self.isDisabled = isDisabled
+        self.action = action
     }
 
     var body: some View {
-        Button(action: {}) {
+        Button(action: action) {
             HStack(spacing: 2) {
                 Image(systemName: systemImage)
                 Text(title)
             }
         }
         .buttonStyle(.borderless)
+        .disabled(isDisabled)
     }
 }
 
